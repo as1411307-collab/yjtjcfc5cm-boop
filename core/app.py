@@ -23,6 +23,8 @@ OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2")
 LANGFLOW_URL = os.getenv("LANGFLOW_URL", "").rstrip("/")
 LANGFLOW_FLOW_ID = os.getenv("LANGFLOW_FLOW_ID", "")
 LANGFLOW_API_KEY = os.getenv("LANGFLOW_API_KEY", "")
+MAX_EXPORT_CONTENT_BYTES = 10_000_000
+MAX_EXPORT_MESSAGES = 10000
 
 
 def db():
@@ -263,22 +265,23 @@ def delete_session(session_id: str):
 def export_session(session_id: str):
     """Export one conversation as JSON; memory and audit data are deliberately excluded."""
     with db() as conn:
+        # Keep the size check and fetch on the same SQLite read snapshot.
+        conn.execute("BEGIN")
         session = conn.execute(
             "SELECT id,created_at FROM sessions WHERE id=?", (session_id,)
         ).fetchone()
         if session is None:
             raise HTTPException(status_code=404, detail="Session not found")
-        message_count = conn.execute(
-            "SELECT COUNT(*) FROM messages WHERE session_id=?", (session_id,)
-        ).fetchone()[0]
-        if message_count > 10000:
+        totals = conn.execute(
+            "SELECT COUNT(*), COALESCE(SUM(length(CAST(content AS BLOB))), 0) "
+            "FROM messages WHERE session_id=?", (session_id,)
+        ).fetchone()
+        if totals[0] > MAX_EXPORT_MESSAGES or totals[1] > MAX_EXPORT_CONTENT_BYTES:
             raise HTTPException(status_code=413, detail="Conversation too large to export")
         messages = conn.execute(
             "SELECT role,content,created_at FROM messages WHERE session_id=? ORDER BY id",
             (session_id,)
         ).fetchall()
-        if sum(len(message["content"].encode("utf-8")) for message in messages) > 10_000_000:
-            raise HTTPException(status_code=413, detail="Conversation too large to export")
     response = JSONResponse({
         "schema_version": 1,
         "session": dict(session),

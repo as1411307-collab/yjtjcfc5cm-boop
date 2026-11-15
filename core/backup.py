@@ -21,6 +21,20 @@ def _key(password: str, salt: bytes) -> bytes:
     return Scrypt(salt=salt, length=32, n=2**15, r=8, p=1).derive(password.encode("utf-8"))
 
 
+def _read_bounded(path: Path, limit: int, error: str) -> bytes:
+    # Check the opened file, not a pathname that could be replaced before open.
+    with path.open("rb") as stream:
+        size = os.fstat(stream.fileno()).st_size
+        if size > limit:
+            raise ValueError(error)
+        # One extra byte detects growth without an unbounded read. Reject size
+        # changes rather than processing a truncated or concurrently edited file.
+        payload = stream.read(size + 1)
+        if len(payload) != size:
+            raise ValueError("File size changed while reading backup data")
+        return payload
+
+
 def create_backup(database: Path, destination: Path, password: str) -> None:
     if not database.is_file():
         raise FileNotFoundError(database)
@@ -31,13 +45,16 @@ def create_backup(database: Path, destination: Path, password: str) -> None:
         snapshot = Path(folder) / "snapshot.sqlite3"
         with sqlite3.connect(database) as source, sqlite3.connect(snapshot) as target:
             source.backup(target)
-        plaintext = snapshot.read_bytes()
-    if len(plaintext) > MAX_BACKUP_BYTES:
-        raise ValueError("Database exceeds maximum backup size")
+        plaintext = _read_bounded(
+            snapshot, MAX_BACKUP_BYTES, "Database exceeds maximum backup size"
+        )
     salt, nonce = os.urandom(SALT_BYTES), os.urandom(NONCE_BYTES)
     header = MAGIC + salt + nonce
     encrypted = AESGCM(_key(password, salt)).encrypt(nonce, plaintext, header)
-    destination.write_bytes(header + encrypted)
+    del plaintext
+    with destination.open("wb") as output:
+        output.write(header)
+        output.write(encrypted)
     try:
         destination.chmod(0o600)
     except OSError:
@@ -45,15 +62,16 @@ def create_backup(database: Path, destination: Path, password: str) -> None:
 
 
 def restore_backup(source: Path, destination: Path, password: str) -> None:
-    payload = source.read_bytes()
     header_size = len(MAGIC) + SALT_BYTES + NONCE_BYTES
+    payload = _read_bounded(
+        source, MAX_BACKUP_BYTES + header_size + 16, "Backup exceeds maximum size"
+    )
     if not payload.startswith(MAGIC) or len(payload) <= header_size + 16:
         raise ValueError("Not a valid Unified AI encrypted backup")
-    if len(payload) > MAX_BACKUP_BYTES + header_size + 16:
-        raise ValueError("Backup exceeds maximum size")
     salt = payload[len(MAGIC):len(MAGIC) + SALT_BYTES]
     nonce = payload[len(MAGIC) + SALT_BYTES:header_size]
     plaintext = AESGCM(_key(password, salt)).decrypt(nonce, payload[header_size:], payload[:header_size])
+    del payload
     if not plaintext.startswith(b"SQLite format 3\x00"):
         raise ValueError("Decrypted backup is not SQLite")
     destination.parent.mkdir(parents=True, exist_ok=True)
