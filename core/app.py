@@ -6,7 +6,7 @@ import os
 import secrets
 import sqlite3
 import time
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, closing
 from pathlib import Path
 from typing import Literal
 
@@ -137,8 +137,17 @@ def health():
 def readiness():
     """Check database usability without contacting or exposing model services."""
     try:
-        with db() as conn:
-            conn.execute("SELECT 1").fetchone()
+        # mode=ro fails if the file is missing; never recreate it during a probe.
+        # as_uri() safely quotes paths containing spaces, '?' or '#'.
+        uri = DB_PATH.resolve().as_uri() + "?mode=ro"
+        with closing(sqlite3.connect(uri, uri=True, timeout=10)) as conn:
+            conn.execute("BEGIN")
+            required_tables = {"sessions", "messages", "approvals", "memories", "audit"}
+            tables = {row[0] for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            )}
+            if not required_tables.issubset(tables):
+                raise ValueError("Required database tables missing")
             integrity = conn.execute("PRAGMA quick_check(1)").fetchone()[0]
         if integrity != "ok":
             raise ValueError("Database integrity check failed")
