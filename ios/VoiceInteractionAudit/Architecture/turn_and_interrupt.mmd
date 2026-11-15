@@ -1,0 +1,30 @@
+sequenceDiagram
+  autonumber
+  actor Person as User
+  participant Mic as Mic / Apple Audio
+  participant Policy as Swift Turn Policy
+  participant Audio as Playback Engine
+  participant Provider as Voice Provider
+  participant Core as Sovereign Core
+  Person->>Mic: Speak or think aloud
+  Mic->>Policy: confirmed speech started (not noise)
+  opt Assistant audio is playing and user barge-in enabled
+    Policy->>Audio: STOP audible playback now
+    Policy->>Provider: Cancel spoken response if not auto cancelled
+    opt WebSocket audio mode
+      Policy->>Provider: Truncate at actually played milliseconds
+    end
+  end
+  Mic->>Policy: Speech stopped / semantic turn complete?
+  alt Incomplete thought or hold-to-finish mode
+    Policy-->>Person: Keep listening / wait for explicit finish
+  else Semantic end or manual finish
+    Mic->>Policy: Final verified transcript
+    Policy->>Core: Persist utterance with idempotency id
+    Core-->>Policy: Durable checkpoint acknowledged
+    opt Chained text-agent pathway
+      Policy->>Core: Submit exactly once
+    end
+  end
+  Note over Policy,Core: Stopping speech NEVER silently cancels backend tasks
+  Core-->>Person: Task receipt / approval card (visual confirmation)

@@ -16,3 +16,30 @@ _site/
 # counterproductive to check this file into the repository.
 # Details at https://github.com/github/pages-gem/issues/768
 Gemfile.lock
+
+# Unified AI Personal v20
+__pycache__/
+.pytest_cache/
+.venv/
+.env
+data/
+*.pyc
+
+# Never commit local credentials or Apple signing material
+.env.*
+*.p8
+*.p12
+*.pem
+*.key
+*.mobileprovision
+*.provisionprofile
+*.keystore
+*.jks
+*.xcuserstate
+xcuserdata/
+DerivedData/
+.build/
+.swiftpm/
+.DS_Store
+*.ipa
+*.uai
