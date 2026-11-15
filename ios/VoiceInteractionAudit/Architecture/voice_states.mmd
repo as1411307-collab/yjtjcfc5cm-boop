@@ -1,0 +1,17 @@
+stateDiagram-v2
+  [*] --> Off
+  Off --> AwaitingAudio: User taps Start + permission + authenticated connection
+  AwaitingAudio --> Listening: Microphone actually started
+  AwaitingAudio --> Paused: Audio start failure
+  Listening --> Listening: Silence but semantic turn incomplete
+  Listening --> PendingTranscript: Semantic end or user presses Finish
+  PendingTranscript --> SavingCheckpoint: Final transcript confirmed
+  SavingCheckpoint --> Processing: Checkpoint saved / chained only submits then
+  SavingCheckpoint --> Paused: Checkpoint write failed
+  Processing --> Speaking: Local audio playback begins
+  Speaking --> Listening: Confirmed barge-in stops spoken response
+  Speaking --> Off: User ends session
+  Listening --> Off: User ends session
+  Paused --> AwaitingAudio: Explicit user restart
+  Listening --> Paused: Network, route, permission or system interruption
+  Speaking --> Paused: Network, route, permission or system interruption

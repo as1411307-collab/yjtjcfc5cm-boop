@@ -1,0 +1,28 @@
+name: UnifiedAI
+options:
+  bundleIdPrefix: com.personal.unifiedai
+settings:
+  base:
+    SWIFT_VERSION: 5.9
+    IPHONEOS_DEPLOYMENT_TARGET: "17.0"
+packages:
+  VoiceInteractionAudit:
+    path: VoiceInteractionAudit
+targets:
+  UnifiedAI:
+    type: application
+    platform: iOS
+    sources:
+      - UnifiedAI
+    dependencies:
+      - package: VoiceInteractionAudit
+        product: VoiceInteractionCore
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_NSMicrophoneUsageDescription: "تسجيل كلامك عند الضغط على زر المحادثة الصوتية"
+        INFOPLIST_KEY_NSSpeechRecognitionUsageDescription: "تحويل كلامك إلى نص لإرساله إلى مساعدك الشخصي"
+        INFOPLIST_KEY_NSFaceIDUsageDescription: "لحماية الوصول إلى مساعدك الشخصي"
+        TARGETED_DEVICE_FAMILY: "1,2"
+        CODE_SIGN_STYLE: Automatic
+        PRODUCT_BUNDLE_IDENTIFIER: com.personal.unifiedai

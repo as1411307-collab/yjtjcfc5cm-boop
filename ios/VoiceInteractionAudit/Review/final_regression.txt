@@ -1,0 +1,104 @@
+[0/1] Planning build
+Building for production...
+[0/5] Write sources
+[2/5] Write swift-version--1BA0962812E73E12.txt
+[4/6] Compiling VoiceInteractionCore VoiceInteractionCore.swift
+[5/7] Compiling VoiceInteractionCoreTests VoiceInteractionCoreTests.swift
+[5/7] /mnt/data/VoiceInteractionAudit_2026-11-15/.build/x86_64-unknown-linux-gnu/release/VoiceInteractionAuditPackageDiscoveredTests.derived/all-discovered-tests.swift
+[6/8] Write sources
+[8/9] Compiling VoiceInteractionAuditPackageDiscoveredTests VoiceInteractionCoreTests.swift
+[8/11] /mnt/data/VoiceInteractionAudit_2026-11-15/.build/x86_64-unknown-linux-gnu/release/VoiceInteractionAuditPackageTests.derived/runner.swift
+[9/12] Write sources
+[11/13] Compiling VoiceInteractionAuditPackageTests runner.swift
+[11/13] Write Objects.LinkFileList
+[12/13] Linking VoiceInteractionAuditPackageTests.xctest
+Build complete! (4.22s)
+Test Suite 'All tests' started at 2026-11-15 10:04:52.794
+Test Suite 'release.xctest' started at 2026-11-15 10:04:52.795
+Test Suite 'VoiceInteractionCoreTests' started at 2026-11-15 10:04:52.795
+Test Case 'VoiceInteractionCoreTests.testActivePacketForwardedOnlyForMatchingResponse' started at 2026-11-15 10:04:52.795
+Test Case 'VoiceInteractionCoreTests.testActivePacketForwardedOnlyForMatchingResponse' passed (0.001 seconds)
+Test Case 'VoiceInteractionCoreTests.testAppInactiveStopsMicrophone' started at 2026-11-15 10:04:52.796
+Test Case 'VoiceInteractionCoreTests.testAppInactiveStopsMicrophone' passed (0.0 seconds)
+Test Case 'VoiceInteractionCoreTests.testAudioRouteChangeStopsUnexpectedSpeakerLeak' started at 2026-11-15 10:04:52.796
+Test Case 'VoiceInteractionCoreTests.testAudioRouteChangeStopsUnexpectedSpeakerLeak' passed (0.0 seconds)
+Test Case 'VoiceInteractionCoreTests.testCheckpointFailureIsFailClosedUntilManualRetry' started at 2026-11-15 10:04:52.797
+Test Case 'VoiceInteractionCoreTests.testCheckpointFailureIsFailClosedUntilManualRetry' passed (0.0 seconds)
+Test Case 'VoiceInteractionCoreTests.testCheckpointMustBeConfirmedBeforeNetworkSend' started at 2026-11-15 10:04:52.797
+Test Case 'VoiceInteractionCoreTests.testCheckpointMustBeConfirmedBeforeNetworkSend' passed (0.0 seconds)
+Test Case 'VoiceInteractionCoreTests.testConfirmedBargeInCancelsOnlyAudioNotTask' started at 2026-11-15 10:04:52.797
+Test Case 'VoiceInteractionCoreTests.testConfirmedBargeInCancelsOnlyAudioNotTask' passed (0.1 seconds)
+Test Case 'VoiceInteractionCoreTests.testDelayedFinalTranscriptCommitsOnlyAfterArrival' started at 2026-11-15 10:04:52.897
+Test Case 'VoiceInteractionCoreTests.testDelayedFinalTranscriptCommitsOnlyAfterArrival' passed (0.0 seconds)
+Test Case 'VoiceInteractionCoreTests.testEmptyTranscriptNeverSent' started at 2026-11-15 10:04:52.898
+Test Case 'VoiceInteractionCoreTests.testEmptyTranscriptNeverSent' passed (0.0 seconds)
+Test Case 'VoiceInteractionCoreTests.testEngineFailureStopsSessionAndSurfacesError' started at 2026-11-15 10:04:52.898
+Test Case 'VoiceInteractionCoreTests.testEngineFailureStopsSessionAndSurfacesError' passed (0.0 seconds)
+Test Case 'VoiceInteractionCoreTests.testExplicitStopStillCancelsWhenProviderAutoCancelsBargeIn' started at 2026-11-15 10:04:52.898
+Test Case 'VoiceInteractionCoreTests.testExplicitStopStillCancelsWhenProviderAutoCancelsBargeIn' passed (0.0 seconds)
+Test Case 'VoiceInteractionCoreTests.testExternalApprovalNeverBecomesVoiceExecution' started at 2026-11-15 10:04:52.898
+Test Case 'VoiceInteractionCoreTests.testExternalApprovalNeverBecomesVoiceExecution' passed (0.0 seconds)
+Test Case 'VoiceInteractionCoreTests.testHoldModeCanRearmMicrophoneForSecondTurn' started at 2026-11-15 10:04:52.898
+Test Case 'VoiceInteractionCoreTests.testHoldModeCanRearmMicrophoneForSecondTurn' passed (0.0 seconds)
+Test Case 'VoiceInteractionCoreTests.testHoldUntilFinishedIgnoresSemanticAutoEnd' started at 2026-11-15 10:04:52.899
+Test Case 'VoiceInteractionCoreTests.testHoldUntilFinishedIgnoresSemanticAutoEnd' passed (0.0 seconds)
+Test Case 'VoiceInteractionCoreTests.testInterruptionCanBeDisabled' started at 2026-11-15 10:04:52.899
+Test Case 'VoiceInteractionCoreTests.testInterruptionCanBeDisabled' passed (0.0 seconds)
+Test Case 'VoiceInteractionCoreTests.testLateMicrophoneAckAfterMuteGetsShutOff' started at 2026-11-15 10:04:52.899
+Test Case 'VoiceInteractionCoreTests.testLateMicrophoneAckAfterMuteGetsShutOff' passed (0.0 seconds)
+Test Case 'VoiceInteractionCoreTests.testLatePacketDroppedAfterCancellation' started at 2026-11-15 10:04:52.899
+Test Case 'VoiceInteractionCoreTests.testLatePacketDroppedAfterCancellation' passed (0.0 seconds)
+Test Case 'VoiceInteractionCoreTests.testLiveCommitsOnlySemanticCompletion' started at 2026-11-15 10:04:52.899
+Test Case 'VoiceInteractionCoreTests.testLiveCommitsOnlySemanticCompletion' passed (0.0 seconds)
+Test Case 'VoiceInteractionCoreTests.testLiveSilenceDoesNotCommitTurn' started at 2026-11-15 10:04:52.899
+Test Case 'VoiceInteractionCoreTests.testLiveSilenceDoesNotCommitTurn' passed (0.0 seconds)
+Test Case 'VoiceInteractionCoreTests.testMicrophoneStatusNeedsActualEngineAck' started at 2026-11-15 10:04:52.899
+Test Case 'VoiceInteractionCoreTests.testMicrophoneStatusNeedsActualEngineAck' passed (0.0 seconds)
+Test Case 'VoiceInteractionCoreTests.testNetworkAdapterCannotIssueUserCommands' started at 2026-11-15 10:04:52.899
+Test Case 'VoiceInteractionCoreTests.testNetworkAdapterCannotIssueUserCommands' passed (0.0 seconds)
+Test Case 'VoiceInteractionCoreTests.testNetworkLossStopsCaptureAndNeverAutoRestarts' started at 2026-11-15 10:04:52.899
+Test Case 'VoiceInteractionCoreTests.testNetworkLossStopsCaptureAndNeverAutoRestarts' passed (0.0 seconds)
+Test Case 'VoiceInteractionCoreTests.testNoDuplicateCaptureOnRepeatedStart' started at 2026-11-15 10:04:52.899
+Test Case 'VoiceInteractionCoreTests.testNoDuplicateCaptureOnRepeatedStart' passed (0.0 seconds)
+Test Case 'VoiceInteractionCoreTests.testNoMicPermissionRequiresConsent' started at 2026-11-15 10:04:52.899
+Test Case 'VoiceInteractionCoreTests.testNoMicPermissionRequiresConsent' passed (0.0 seconds)
+Test Case 'VoiceInteractionCoreTests.testOldSessionAudioIsRejectedAfterReconnection' started at 2026-11-15 10:04:52.900
+Test Case 'VoiceInteractionCoreTests.testOldSessionAudioIsRejectedAfterReconnection' passed (0.0 seconds)
+Test Case 'VoiceInteractionCoreTests.testOverlappingResponsesAreNotSilentlySwapped' started at 2026-11-15 10:04:52.900
+Test Case 'VoiceInteractionCoreTests.testOverlappingResponsesAreNotSilentlySwapped' passed (0.0 seconds)
+Test Case 'VoiceInteractionCoreTests.testPermissionRevokedShutsDownAndExplains' started at 2026-11-15 10:04:52.900
+Test Case 'VoiceInteractionCoreTests.testPermissionRevokedShutsDownAndExplains' passed (0.0 seconds)
+Test Case 'VoiceInteractionCoreTests.testPlayheadNeverDecreasesOrBecomesNegative' started at 2026-11-15 10:04:52.900
+Test Case 'VoiceInteractionCoreTests.testPlayheadNeverDecreasesOrBecomesNegative' passed (0.0 seconds)
+Test Case 'VoiceInteractionCoreTests.testProviderAutoCancelAvoidsSecondCancel' started at 2026-11-15 10:04:52.900
+Test Case 'VoiceInteractionCoreTests.testProviderAutoCancelAvoidsSecondCancel' passed (0.1 seconds)
+Test Case 'VoiceInteractionCoreTests.testPushToTalkCanRepeatAfterCheckpoint' started at 2026-11-15 10:04:53.000
+Test Case 'VoiceInteractionCoreTests.testPushToTalkCanRepeatAfterCheckpoint' passed (0.0 seconds)
+Test Case 'VoiceInteractionCoreTests.testPushToTalkRequiresPressAndRelease' started at 2026-11-15 10:04:53.001
+Test Case 'VoiceInteractionCoreTests.testPushToTalkRequiresPressAndRelease' passed (0.0 seconds)
+Test Case 'VoiceInteractionCoreTests.testRealtimeNeverDuplicatesProviderCommittedAudio' started at 2026-11-15 10:04:53.001
+Test Case 'VoiceInteractionCoreTests.testRealtimeNeverDuplicatesProviderCommittedAudio' passed (0.0 seconds)
+Test Case 'VoiceInteractionCoreTests.testRepeatedFinalTranscriptNeverDoubleSubmits' started at 2026-11-15 10:04:53.001
+Test Case 'VoiceInteractionCoreTests.testRepeatedFinalTranscriptNeverDoubleSubmits' passed (0.0 seconds)
+Test Case 'VoiceInteractionCoreTests.testStartingLiveStartsCapture' started at 2026-11-15 10:04:53.001
+Test Case 'VoiceInteractionCoreTests.testStartingLiveStartsCapture' passed (0.0 seconds)
+Test Case 'VoiceInteractionCoreTests.testSystemInterruptionCannotAutomaticallyResume' started at 2026-11-15 10:04:53.001
+Test Case 'VoiceInteractionCoreTests.testSystemInterruptionCannotAutomaticallyResume' passed (0.0 seconds)
+Test Case 'VoiceInteractionCoreTests.testUnconfirmedNoiseCannotInterrupt' started at 2026-11-15 10:04:53.001
+Test Case 'VoiceInteractionCoreTests.testUnconfirmedNoiseCannotInterrupt' passed (0.0 seconds)
+Test Case 'VoiceInteractionCoreTests.testUnfinishedDraftCheckpointedOnDisconnect' started at 2026-11-15 10:04:53.001
+Test Case 'VoiceInteractionCoreTests.testUnfinishedDraftCheckpointedOnDisconnect' passed (0.0 seconds)
+Test Case 'VoiceInteractionCoreTests.testWebRTCDoesNotTruncateClientSide' started at 2026-11-15 10:04:53.002
+Test Case 'VoiceInteractionCoreTests.testWebRTCDoesNotTruncateClientSide' passed (0.1 seconds)
+Test Case 'VoiceInteractionCoreTests.testWrongResponseCompletionDoesNotStopNewPlayback' started at 2026-11-15 10:04:53.102
+Test Case 'VoiceInteractionCoreTests.testWrongResponseCompletionDoesNotStopNewPlayback' passed (0.0 seconds)
+Test Suite 'VoiceInteractionCoreTests' passed at 2026-11-15 10:04:53.102
+	 Executed 38 tests, with 0 failures (0 unexpected) in 0.306 (0.306) seconds
+Test Suite 'release.xctest' passed at 2026-11-15 10:04:53.102
+	 Executed 38 tests, with 0 failures (0 unexpected) in 0.306 (0.306) seconds
+Test Suite 'All tests' passed at 2026-11-15 10:04:53.102
+	 Executed 38 tests, with 0 failures (0 unexpected) in 0.306 (0.306) seconds
+◇ Test run started.
+↳ Testing Library Version: 6.2.1 (c9d57c83568b06d)
+↳ Target Platform: x86_64-unknown-linux-gnu
+✔ Test run with 0 tests in 0 suites passed after 0.001 seconds.
