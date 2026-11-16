@@ -197,14 +197,18 @@ struct ContentView: View {
             Form {
                 agentCommandControls
                 if let localNavigationPlan {
-                    Section("معاينة التنقل داخل التطبيق") {
+                    Group {
+                        Text("معاينة التنقل داخل التطبيق")
+                            .font(.headline)
                         Text(localNavigationPlan.description)
                         Button("تنفيذ التنقل") { executeLocalNavigation() }
                         Button("إلغاء", role: .cancel) { localNavigationPlan = nil }
                     }
                 }
                 if let agentPlan {
-                    Section("معاينة قبل التنفيذ") {
+                    Group {
+                        Text("معاينة قبل التنفيذ")
+                            .font(.headline)
                         Text(agentPlan.action == "rename_session" ? "تغيير عنوان المحادثة" : (agentPlan.action == "create_task" ? "إضافة مهمة إلى لوحة العمل" : (agentPlan.action == "set_task_status" ? "تحديث حالة المهمة" : (agentPlan.action == "delete_task" ? "حذف مهمة من لوحة العمل" : "تغيير تثبيت المحادثة"))))
                         ForEach(agentPlan.payload.keys.filter { $0 != "task_id" && !$0.hasPrefix("_") }.sorted(), id: \.self) { key in
                             if let value = agentPlan.payload[key] {
