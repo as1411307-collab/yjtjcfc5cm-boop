@@ -9,6 +9,8 @@ import pytest
 
 from fastapi.testclient import TestClient
 
+from core.app import REQUIRED_TABLES
+
 
 def test_readiness_requires_auth_and_checks_database():
     with tempfile.TemporaryDirectory() as directory:
@@ -48,9 +50,6 @@ def test_readiness_returns_503_if_database_missing():
                 assert response.json()["detail"] == "Database unavailable"
 
 
-REQUIRED_TABLES = ("sessions", "messages", "approvals", "memories", "audit")
-
-
 # Exercise failures after startup so initialize() cannot repair the test state.
 @pytest.fixture
 def ready_client(tmp_path, monkeypatch):
@@ -73,7 +72,20 @@ def test_readiness_does_not_recreate_deleted_database(ready_client):
         assert not module.DB_PATH.exists()
 
 
-@pytest.mark.parametrize("table", REQUIRED_TABLES)
+def test_required_tables_match_initialized_schema(tmp_path, monkeypatch):
+    import core.app as module
+    monkeypatch.setattr(module, "DB_PATH", tmp_path / "fresh.sqlite3")
+    module.initialize()
+    with closing(sqlite3.connect(module.DB_PATH)) as conn:
+        tables = {
+            row[0] for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            ) if not row[0].startswith("sqlite_")
+        }
+    assert tables == module.REQUIRED_TABLES
+
+
+@pytest.mark.parametrize("table", sorted(REQUIRED_TABLES))
 def test_readiness_rejects_each_missing_table(ready_client, table):
     module, client = ready_client
     with closing(sqlite3.connect(module.DB_PATH)) as conn:

@@ -24,6 +24,8 @@ LANGFLOW_URL = os.getenv("LANGFLOW_URL", "").rstrip("/")
 LANGFLOW_FLOW_ID = os.getenv("LANGFLOW_FLOW_ID", "")
 LANGFLOW_API_KEY = os.getenv("LANGFLOW_API_KEY", "")
 
+REQUIRED_TABLES = frozenset({"sessions", "messages", "approvals", "memories", "audit"})
+
 
 def db():
     conn = sqlite3.connect(DB_PATH, timeout=10)
@@ -142,11 +144,10 @@ def readiness():
         uri = DB_PATH.resolve().as_uri() + "?mode=ro"
         with closing(sqlite3.connect(uri, uri=True, timeout=10)) as conn:
             conn.execute("BEGIN")
-            required_tables = {"sessions", "messages", "approvals", "memories", "audit"}
             tables = {row[0] for row in conn.execute(
                 "SELECT name FROM sqlite_master WHERE type='table'"
             )}
-            if not required_tables.issubset(tables):
+            if not REQUIRED_TABLES.issubset(tables):
                 raise ValueError("Required database tables missing")
             integrity = conn.execute("PRAGMA quick_check(1)").fetchone()[0]
         if integrity != "ok":
