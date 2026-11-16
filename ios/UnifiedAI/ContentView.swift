@@ -177,21 +177,25 @@ struct ContentView: View {
         }
     }
 
+    private var agentCommandControls: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("الوكيل التفاعلي")
+                .font(.headline)
+            Text("أوامر التنقل: افتح المهام، افتح الإعدادات، افتح المحادثات، افتح الذاكرة، اعرض المهام غير المنجزة. وأوامر تعديل البيانات تتطلب موافقة الخادم.")
+                .font(.footnote)
+            TextField("اكتب أمرًا واضحًا", text: $agentCommand)
+                .textInputAutocorrectionDisabled()
+            Button("معاينة الأمر") {
+                Task { await previewAgentCommand() }
+            }
+            .disabled(agentBusy || sessionID.isEmpty || agentCommand.isEmpty)
+        }
+    }
+
     private var agentSheet: some View {
         NavigationStack {
             Form {
-                Group {
-                    Text("الوكيل التفاعلي")
-                        .font(.headline)
-                    Text("أوامر التنقل: افتح المهام، افتح الإعدادات، افتح المحادثات، افتح الذاكرة، اعرض المهام غير المنجزة. وأوامر تعديل البيانات تتطلب موافقة الخادم.")
-                        .font(.footnote)
-                    TextField("اكتب أمرًا واضحًا", text: $agentCommand)
-                        .textInputAutocorrectionDisabled()
-                    Button("معاينة الأمر") {
-                        Task { await previewAgentCommand() }
-                    }
-                    .disabled(agentBusy || sessionID.isEmpty || agentCommand.isEmpty)
-                }
+                agentCommandControls
                 if let localNavigationPlan {
                     Section("معاينة التنقل داخل التطبيق") {
                         Text(localNavigationPlan.description)
