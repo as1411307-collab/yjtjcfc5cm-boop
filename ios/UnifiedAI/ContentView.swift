@@ -156,7 +156,7 @@ struct ContentView: View {
                 Button("حسنًا") { notice = "" }
             } message: { Text(notice) }
         }
-        .environment(\\.layoutDirection, .rightToLeft)
+        .environment(\.layoutDirection, .rightToLeft)
         .task {
             await authenticateUnlock()
             if unlocked && !sessionID.isEmpty && SecretStore.load() != nil {
@@ -651,7 +651,7 @@ struct ContentView: View {
                             }
                         }
                     }
-                    .environment(\\.layoutDirection, .rightToLeft)
+                    .environment(\.layoutDirection, .rightToLeft)
                     Text("اقتراحات محلية بالقواعد، لا ترسل بيانات لخدمة إضافية.")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
