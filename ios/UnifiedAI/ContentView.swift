@@ -21,8 +21,8 @@ struct ContentView: View {
     @State private var requestGeneration = UUID()
     @State private var retryRequestID: String?
     @State private var retryFingerprint = ""
-    @State private var voiceSessionID = ""
     @State private var notice = ""
+    @State private var lockMessage = ""
     @State private var showAgent = false
     @State private var showTaskBoard = false
     @State private var boardTasks: [BoardTask] = []
@@ -44,9 +44,18 @@ struct ContentView: View {
     @State private var editedTitle = ""
     @State private var personalMemories: [PersonalMemory] = []
     @State private var newMemory = ""
-    @StateObject private var voice = NativeVoiceService()
-    @StateObject private var voicePolicy = VoicePolicyController()
+    @StateObject private var voice: NativeVoiceService
+    @StateObject private var voiceCoordinator: VoiceSessionCoordinator
     @Environment(\.scenePhase) private var scenePhase
+
+    init() {
+        // The view owns the service for live UI state; the coordinator owns
+        // every start/stop/submit decision through the policy reducer.
+        let audio = NativeVoiceService()
+        let policy = VoicePolicyController()
+        _voice = StateObject(wrappedValue: audio)
+        _voiceCoordinator = StateObject(wrappedValue: VoiceSessionCoordinator(audio: audio, policy: policy))
+    }
 
     private var client: APIClient {
         APIClient(server: serverURL.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -61,6 +70,11 @@ struct ContentView: View {
             return
         }
         unlocked = authenticated
+        if authenticated {
+            lockMessage = ""
+        } else {
+            lockMessage = DeviceLock.unavailabilityReason() ?? "لم تتم المصادقة. حاول مرة أخرى."
+        }
     }
 
     var body: some View {
@@ -73,6 +87,13 @@ struct ContentView: View {
                         Button("فتح باستخدام Face ID أو رمز الجهاز") {
                             Task { await authenticateUnlock() }
                         }.buttonStyle(.borderedProminent)
+                        if !lockMessage.isEmpty {
+                            Text(lockMessage)
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                                .multilineTextAlignment(.center)
+                                .padding(.horizontal)
+                        }
                     }.frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else if SecretStore.load() == nil || serverURL.isEmpty || showSettings {
                     settings
@@ -82,18 +103,12 @@ struct ContentView: View {
             }
             .navigationTitle("Unified AI")
             .onAppear {
-                voice.onFinalTranscript = { text in
-                    guard unlocked, !busy, scenePhase == .active, voiceSessionID == sessionID else { return }
-                    input = text
-                    voiceReplyPending = reviewVoiceTranscript
-                    if !reviewVoiceTranscript { startSend(speakAnswer: true) }
-                }
+                configureVoiceCoordinator()
             }
             .onChange(of: scenePhase) { _, phase in
                 if phase != .active {
                     cancelPendingChat()
-                    voice.stopAll()
-                    voicePolicy.appBecameInactive()
+                    voiceCoordinator.appBecameInactive()
                     clearExportFile()
                 }
                 if phase == .background {
@@ -148,13 +163,30 @@ struct ContentView: View {
                         }
                     }
                     ToolbarItem(placement: .topBarLeading) {
-                        Button("قفل") { cancelPendingChat(); clearExportFile(); voice.stopAll(); voicePolicy.stopSession(); unlocked = false }
+                        Button("قفل") { cancelPendingChat(); clearExportFile(); voiceCoordinator.endSession(); unlocked = false }
                     }
                 }
             }
             .alert("تنبيه", isPresented: Binding(get: { !notice.isEmpty }, set: { if !$0 { notice = "" } })) {
                 Button("حسنًا") { notice = "" }
             } message: { Text(notice) }
+            .alert("الصوت", isPresented: Binding(
+                get: { !voiceCoordinator.alertMessage.isEmpty },
+                set: { if !$0 { voiceCoordinator.alertMessage = "" } }
+            )) {
+                if voiceCoordinator.checkpointFailurePending {
+                    Button("إعادة المحاولة") { voiceCoordinator.retryCheckpoint() }
+                }
+                Button("حسنًا") { voiceCoordinator.alertMessage = "" }
+            } message: { Text(voiceCoordinator.alertMessage) }
+            .alert("طلب موافقة", isPresented: Binding(
+                get: { voiceCoordinator.approvalCard != nil },
+                set: { if !$0 { voiceCoordinator.approvalCard = nil } }
+            )) {
+                Button("حسنًا") { voiceCoordinator.approvalCard = nil }
+            } message: {
+                Text("لا يمكن اعتماد هذا الإجراء صوتياً؛ راجعه من لوحة الوكيل. \(voiceCoordinator.approvalCard?.description ?? "")")
+            }
         }
         .environment(\.layoutDirection, .rightToLeft)
         .task {
@@ -529,8 +561,7 @@ struct ContentView: View {
             List(recentSessions) { item in
                 Button {
                     cancelPendingChat()
-                    voice.stopAll()
-                    voicePolicy.stopSession()
+                    voiceCoordinator.endSession()
                     agentPlan = nil
                     localNavigationPlan = nil
                     sessionID = item.id
@@ -700,7 +731,8 @@ struct ContentView: View {
             }.padding()
             HStack(spacing: 14) {
                 Button {
-                    Task { await toggleVoice() }
+                    if !voice.recording { cancelPendingChat() }
+                    voiceCoordinator.handleTalkButton()
                 } label: {
                     Label(voice.recording ? "إنهاء التسجيل وإرسال" : "التحدث بالعربية",
                           systemImage: voice.recording ? "stop.circle.fill" : "mic.fill")
@@ -731,6 +763,32 @@ struct ContentView: View {
             if let error = voice.errorMessage {
                 Text(error).font(.footnote).foregroundStyle(.red).padding(.horizontal)
             }
+            if !voiceCoordinator.pendingCheckpoints.isEmpty {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("كلام محفوظ محلياً لم يُرسَل")
+                        .font(.footnote.bold())
+                    ForEach(voiceCoordinator.pendingCheckpoints) { checkpoint in
+                        HStack {
+                            Text(checkpoint.text)
+                                .font(.footnote)
+                                .lineLimit(2)
+                            Spacer()
+                            Button("استرداد") {
+                                input = checkpoint.text
+                                voiceCoordinator.discardCheckpoint(id: checkpoint.id)
+                            }
+                            Button("حذف", role: .destructive) {
+                                voiceCoordinator.discardCheckpoint(id: checkpoint.id)
+                            }
+                        }
+                        .font(.footnote)
+                    }
+                    Text("لا يُعاد إرسال الكلام تلقائياً؛ الاسترداد ينقله إلى حقل الكتابة لترسله بنفسك.")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.horizontal)
+            }
             HStack {
                 if !sessionID.isEmpty {
                 HStack {
@@ -748,8 +806,7 @@ struct ContentView: View {
             }
             Button("محادثة جديدة") {
                     cancelPendingChat()
-                    voice.stopAll()
-                    voicePolicy.stopSession()
+                    voiceCoordinator.endSession()
                     agentPlan = nil
                     localNavigationPlan = nil
                     retryRequestID = nil
@@ -774,8 +831,7 @@ struct ContentView: View {
         guard unlocked, scenePhase == .active, !sessionID.isEmpty else { return }
         cancelPendingChat()
         clearExportFile()
-        voice.stopAll()
-        voicePolicy.stopSession()
+        voiceCoordinator.endSession()
         let deleting = sessionID
         do {
             try await client.deleteSession(deleting)
@@ -827,25 +883,25 @@ struct ContentView: View {
         }
     }
 
-    private func toggleVoice() async {
-        if voice.recording {
-            voice.stopRecording(submit: true)
-            voicePolicy.releaseToTalk()
-        } else {
-            cancelPendingChat()
-            voice.stopSpeech()
-            voiceSessionID = sessionID
-            voicePolicy.configureConnected(true)
-            let permitted = await voice.authorize()
-            voicePolicy.updateMicrophonePermission(permitted)
-            guard permitted else { return }
-            voicePolicy.startSession()
-            voicePolicy.pressToTalk()
-            if await voice.start(), let token = voicePolicy.state.sessionID {
-                voicePolicy.receiveProviderEvent(.microphoneDidStart, sessionID: token)
-            } else {
-                voicePolicy.stopSession()
-            }
+    /// Wires the voice coordinator to the current conversation context.
+    /// Closures read the view's State storage, so they always see current values.
+    private func configureVoiceCoordinator() {
+        voiceCoordinator.clientProvider = { client }
+        voiceCoordinator.contextProvider = { VoiceSubmitContext(sessionID: sessionID, provider: provider) }
+        voiceCoordinator.reviewPolicy = { reviewVoiceTranscript }
+        voiceCoordinator.onSessionCreated = { newSessionID in
+            sessionID = newSessionID
+        }
+        voiceCoordinator.onVoiceExchange = { exchangeSessionID, text, answer in
+            sessionID = exchangeSessionID
+            messages.append(ChatMessage(role: "user", content: text))
+            messages.append(ChatMessage(role: "assistant", content: answer))
+            input = ""
+            Task { await refreshInsights(for: exchangeSessionID) }
+        }
+        voiceCoordinator.onUtteranceReadyForReview = { text in
+            input = text
+            voiceReplyPending = true
         }
     }
 

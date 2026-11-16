@@ -17,13 +17,6 @@ struct ChatMessage: Identifiable {
     let role: String
     let content: String
 }
-struct MessageHistory: Decodable {
-    struct Entry: Decodable {
-        let role: String
-        let content: String
-    }
-    let messages: [Entry]
-}
 enum APIError: LocalizedError {
     case invalidURL, unauthorized, server(Int), serverMessage(String), invalidResponse
     var errorDescription: String? {
@@ -36,10 +29,39 @@ enum APIError: LocalizedError {
         }
     }
 }
-private struct APIErrorDetail: Decodable { let detail: String }
+/// FastAPI returns `detail` either as a plain string (HTTPException) or as an
+/// array of validation objects (422). Decode both, taking the first message.
+private struct APIErrorDetail: Decodable {
+    private struct ValidationItem: Decodable { let msg: String? }
+
+    let message: String
+
+    private enum CodingKeys: String, CodingKey { case detail }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        if let text = try? container.decode(String.self, forKey: .detail) {
+            message = text
+        } else if let items = try? container.decode([ValidationItem].self, forKey: .detail) {
+            message = items.compactMap(\.msg).first ?? ""
+        } else {
+            message = ""
+        }
+    }
+}
 struct APIClient {
     let server: String
     let key: String
+
+    private static let sessionIDPattern = "^[A-Za-z0-9_-]{1,100}$"
+
+    /// Session IDs are embedded in URL paths; reject anything that is not a
+    /// simple token before it reaches the network layer.
+    private func validateSessionID(_ session: String) throws {
+        guard session.range(of: APIClient.sessionIDPattern, options: .regularExpression) != nil else {
+            throw APIError.invalidURL
+        }
+    }
 
     private func request<T: Decodable>(_ path: String, method: String = "GET",
                                        body: Data? = nil) async throws -> T {
@@ -51,7 +73,9 @@ struct APIClient {
         }
         var request = URLRequest(url: url)
         request.httpMethod = method
-        request.timeoutInterval = 115
+        // Must exceed the server chat lease (120s) so a retry never collides
+        // with an in-flight lease and surfaces as an unexplained 409.
+        request.timeoutInterval = 125
         request.setValue(key, forHTTPHeaderField: "X-API-Key")
         if let body {
             request.httpBody = body
@@ -68,8 +92,8 @@ struct APIClient {
         if response.statusCode == 401 { throw APIError.unauthorized }
         guard (200...299).contains(response.statusCode) else {
             if let error = try? JSONDecoder().decode(APIErrorDetail.self, from: data),
-               !error.detail.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                throw APIError.serverMessage(error.detail)
+               !error.message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                throw APIError.serverMessage(error.message)
             }
             throw APIError.server(response.statusCode)
         }
@@ -77,6 +101,7 @@ struct APIClient {
     }
 
     func exportSession(_ session: String) async throws -> Data {
+        try validateSessionID(session)
         let result: ConversationExport = try await request("/sessions/\(session)/export")
         return try JSONEncoder().encode(result)
     }
@@ -102,31 +127,25 @@ struct APIClient {
     }
 
     func deleteSession(_ session: String) async throws {
+        try validateSessionID(session)
         let _: DeleteMemoryResponse = try await request("/sessions/\(session)", method: "DELETE")
     }
 
     func messagePage(session: String, afterID: Int = 0, limit: Int = 50) async throws -> MessagePage {
-        guard session.range(of: "^[A-Za-z0-9_-]{1,100}$", options: .regularExpression) != nil,
-              afterID >= 0, (1...100).contains(limit) else {
+        try validateSessionID(session)
+        guard afterID >= 0, (1...100).contains(limit) else {
             throw APIError.invalidURL
         }
         return try await request("/sessions/\(session)/messages/page?after_id=\(afterID)&limit=\(limit)")
     }
 
     func insights(session: String) async throws -> ConversationInsights {
-        guard session.range(of: "^[A-Za-z0-9_-]{1,100}$", options: .regularExpression) != nil else {
-            throw APIError.invalidURL
-        }
+        try validateSessionID(session)
         return try await request("/sessions/\(session)/insights")
     }
 
     func readiness() async throws -> ReadinessResponse {
         try await request("/health/ready")
-    }
-
-    func history(session: String) async throws -> [ChatMessage] {
-        let result: MessageHistory = try await request("/sessions/\(session)/messages")
-        return result.messages.map { ChatMessage(role: $0.role, content: $0.content) }
     }
 }
 
@@ -173,9 +192,7 @@ struct ConversationListResponse: Decodable {
 }
 extension APIClient {
     func updateSession(_ session: String, title: String, pinned: Bool) async throws {
-        guard session.range(of: "^[A-Za-z0-9_-]{1,100}$", options: .regularExpression) != nil else {
-            throw APIError.invalidURL
-        }
+        try validateSessionID(session)
         let body = try JSONEncoder().encode(SessionUpdateRequest(title: title, pinned: pinned))
         let _: SessionUpdateResponse = try await request("/sessions/\(session)", method: "PATCH", body: body)
     }
@@ -327,22 +344,26 @@ private struct BoardTaskStatus: Decodable {
 }
 extension APIClient {
     func boardTasks(session: String) async throws -> [BoardTask] {
+        try validateSessionID(session)
         let result: BoardTaskList = try await request("/sessions/\(session)/tasks")
         return result.tasks
     }
 
     func addBoardTask(session: String, title: String) async throws {
+        try validateSessionID(session)
         let body = try JSONEncoder().encode(BoardTaskInput(title: title))
         let _: BoardTask = try await request("/sessions/\(session)/tasks", method: "POST", body: body)
     }
 
     func updateBoardTask(session: String, task: String, done: Bool) async throws {
+        try validateSessionID(session)
         let _: BoardTaskStatus = try await request(
             "/sessions/\(session)/tasks/\(task)?done=\(done)", method: "PATCH"
         )
     }
 
     func deleteBoardTask(session: String, task: String) async throws {
+        try validateSessionID(session)
         let _: DeleteMemoryResponse = try await request(
             "/sessions/\(session)/tasks/\(task)", method: "DELETE"
         )

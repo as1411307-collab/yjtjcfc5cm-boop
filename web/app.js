@@ -62,7 +62,10 @@ el("refresh").onclick = async () => {
     if (!data.approvals.length) { el("approvals").textContent = "لا توجد طلبات"; return; }
     for (const item of data.approvals) {
       const div = document.createElement("div");
-      div.className = "msg"; div.textContent = item.action + " — " + item.status + " ";
+      div.className = "msg";
+      const payload = item.payload && Object.keys(item.payload).length
+        ? " — " + JSON.stringify(item.payload).slice(0, 120) : "";
+      div.textContent = item.action + payload + " — " + item.status + " ";
       if (item.status === "pending") for (const [label, approve] of [["موافقة", true], ["رفض", false]]) {
         const button = document.createElement("button"); button.textContent = label;
         button.onclick = async () => {

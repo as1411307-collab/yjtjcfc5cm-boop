@@ -1,3 +1,7 @@
+"""فحوص شكل مصدر (مطابقة نصية) — ليست دليل سلوك مترجَم.
+
+These tests pattern-match Swift source text; they do not compile or execute it.
+"""
 from pathlib import Path
 
 VIEW = (Path(__file__).resolve().parents[1] / "ios/UnifiedAI/ContentView.swift").read_text()

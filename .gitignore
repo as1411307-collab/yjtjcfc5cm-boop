@@ -36,3 +36,4 @@ DerivedData/
 *.ipa
 *.uai
 ios/UnifiedAI.xcodeproj/
+*.egg-info/

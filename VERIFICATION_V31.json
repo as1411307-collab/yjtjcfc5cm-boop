@@ -1,0 +1,23 @@
+{
+  "version": "31",
+  "generated_utc": "2026-11-16T13:30:00Z",
+  "base": "review/v30-engineering-hardening @ e9816bdc755de53008bc4f7c421a17aa3c68d0c5",
+  "scope": "Independent 4-axis audit (security, logic, Swift, test-quality) followed by fixes and feature wiring; all verified on the merged tree in a clean local environment (Python 3.12, Debian 12, Swift 6.0.3)",
+  "python_tests": "126 passed, 1 skipped (opt-in browser test) — verified by running on the merged tree",
+  "python_coverage": "core/app.py 98%, core/backup.py 95% (was 91%/69% at V30)",
+  "swift_tests": "45/45 passed locally with swift test (Swift 6.0.3) — was 38 at V30",
+  "browser_test": "1 passed with real Chromium (RUN_BROWSER_TESTS=1)",
+  "compileall": "passed",
+  "bandit": "0 findings in core",
+  "ios_swift_sources": "8/8 files pass swiftc -parse syntax check (UnifiedAI target needs macOS/Xcode for full type-check; CI macos-15 job remains the judge)",
+  "security_audit": "independent live-probing audit: no critical/high/medium findings; the 6 low findings were fixed (docs endpoints disabled, auth-failure throttle, backup size pre-check, backup 0600-at-creation, approvals payload visible) or already documented (TLS/VPN requirement)",
+  "logic_audit_fixes": "prompt literal-newline bug (also restored the intended injection-boundary property + new regression test), CancelledError reservation release, event-loop-safe DB access in /chat with 503 on lock, export size pre-check in SQL, memory footer budgeting, explicit connection close, negative Content-Length 400",
+  "swift_reducer_fixes": "push-to-talk/hold dead-end without text (capture returns to .off), late finalTranscript frozen out during checkpointPending/Failed (submitted == checkpointed), duplicate checkpointDraft prevented + whitespace trimmed",
+  "feature_effect_runner": "VoiceSessionCoordinator now executes reducer effects end-to-end: microphone start/stop, durable per-turn checkpoints (atomic, file-protected, idempotent by turn id), submit only after checkpoint ACK with requestID = turn id (server idempotent), AVAudioSession interruption/route monitoring and NWPathMonitor as connectivity source of truth, crash-recovered checkpoints shown as manual drafts (never auto-resent)",
+  "not_performed": [
+    "Full iOS app compile (requires macOS/Xcode — CI job)",
+    "Physical iPhone tests (Face ID, microphone, interruptions)",
+    "Real Ollama/Langflow provider calls"
+  ],
+  "production_ready": false
+}

@@ -3,9 +3,11 @@ import argparse
 import getpass
 import os
 import sqlite3
+import sys
 import tempfile
 from pathlib import Path
 
+from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
 
@@ -37,20 +39,19 @@ def create_backup(database: Path, destination: Path, password: str) -> None:
     salt, nonce = os.urandom(SALT_BYTES), os.urandom(NONCE_BYTES)
     header = MAGIC + salt + nonce
     encrypted = AESGCM(_key(password, salt)).encrypt(nonce, plaintext, header)
-    destination.write_bytes(header + encrypted)
-    try:
-        destination.chmod(0o600)
-    except OSError:
-        pass
+    # O_EXCL with mode 0o600: no permission window and no silent overwrite.
+    descriptor = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(descriptor, "wb") as handle:
+        handle.write(header + encrypted)
 
 
 def restore_backup(source: Path, destination: Path, password: str) -> None:
-    payload = source.read_bytes()
     header_size = len(MAGIC) + SALT_BYTES + NONCE_BYTES
+    if source.stat().st_size > MAX_BACKUP_BYTES + header_size + 16:
+        raise ValueError("Backup exceeds maximum size")
+    payload = source.read_bytes()
     if not payload.startswith(MAGIC) or len(payload) <= header_size + 16:
         raise ValueError("Not a valid Unified AI encrypted backup")
-    if len(payload) > MAX_BACKUP_BYTES + header_size + 16:
-        raise ValueError("Backup exceeds maximum size")
     salt = payload[len(MAGIC):len(MAGIC) + SALT_BYTES]
     nonce = payload[len(MAGIC) + SALT_BYTES:header_size]
     plaintext = AESGCM(_key(password, salt)).decrypt(nonce, payload[header_size:], payload[:header_size])
@@ -83,13 +84,17 @@ def main() -> None:
     parser.add_argument("--file", type=Path, required=True)
     args = parser.parse_args()
     password = getpass.getpass("Backup password (12+ characters): ")
-    if args.action == "backup":
-        create_backup(args.database, args.file, password)
-        print(f"Encrypted backup saved: {args.file}")
-    else:
-        print("Stop the API server before restoring. Restoration refuses to overwrite existing files.")
-        restore_backup(args.file, args.database, password)
-        print(f"Database restored: {args.database}")
+    try:
+        if args.action == "backup":
+            create_backup(args.database, args.file, password)
+            print(f"Encrypted backup saved: {args.file}")
+        else:
+            print("Stop the API server before restoring. Restoration refuses to overwrite existing files.")
+            restore_backup(args.file, args.database, password)
+            print(f"Database restored: {args.database}")
+    except InvalidTag:
+        print("Restore failed: wrong password or corrupted backup file", file=sys.stderr)
+        sys.exit(1)
 
 
 if __name__ == "__main__":

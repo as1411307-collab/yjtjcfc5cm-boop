@@ -376,4 +376,107 @@ final class VoiceInteractionCoreTests: XCTestCase {
         ])
     }
 
+    func testPushToTalkReleaseWithoutSpeechDoesNotDeadlock() {
+        var r = makeRunning(mode: .pushToTalk)
+        XCTAssertEqual(r.apply(.pushToTalkPressed), [.beginMicrophone])
+        r.apply(.microphoneDidStart)
+        // Released without any speech at all: no turn, no transcript.
+        XCTAssertEqual(r.apply(.pushToTalkReleased), [.endMicrophone])
+        XCTAssertEqual(r.state.capture, .off)
+        // The button must re-arm: a second press starts capture again.
+        XCTAssertEqual(r.apply(.pushToTalkPressed), [.beginMicrophone])
+    }
+
+    func testPushToTalkEmptyTranscriptDoesNotDeadlock() {
+        var r = makeRunning(mode: .pushToTalk)
+        XCTAssertEqual(r.apply(.pushToTalkPressed), [.beginMicrophone])
+        r.apply(.microphoneDidStart)
+        let id = UUID()
+        r.apply(.userSpeechStarted(turnID: id, isConfirmed: true))
+        XCTAssertEqual(r.apply(.pushToTalkReleased), [.endMicrophone])
+        let late = r.apply(.finalTranscript(turnID: id, text: "   "))
+        XCTAssertTrue(late.isEmpty)
+        XCTAssertFalse(late.contains(where: {
+            if case .checkpointUtterance = $0 { true } else { false }
+        }))
+        XCTAssertFalse(late.contains(where: {
+            if case .submitUtterance = $0 { true } else { false }
+        }))
+        XCTAssertEqual(r.state.capture, .off)
+        XCTAssertEqual(r.apply(.pushToTalkPressed), [.beginMicrophone])
+    }
+
+    func testHoldFinishWithoutTurnDoesNotDeadlock() {
+        var r = makeRunning(mode: .holdUntilFinished)
+        let effects = r.apply(.userFinishedTurn)
+        XCTAssertEqual(effects, [.endMicrophone])
+        XCTAssertFalse(effects.contains(where: {
+            if case .checkpointUtterance = $0 { true } else { false }
+        }))
+        XCTAssertFalse(effects.contains(where: {
+            if case .submitUtterance = $0 { true } else { false }
+        }))
+        XCTAssertEqual(r.state.capture, .off)
+        // Capture can be re-armed afterwards.
+        XCTAssertEqual(r.apply(.userUnmuted), [.beginMicrophone])
+    }
+
+    func testLateTranscriptDuringCheckpointPendingIsIgnored() {
+        var r = makeRunning()
+        let id = UUID()
+        r.apply(.userSpeechStarted(turnID: id, isConfirmed: true))
+        r.apply(.finalTranscript(turnID: id, text: "النص الأول"))
+        XCTAssertEqual(r.apply(.userSpeechStopped(turnID: id, semanticTurnComplete: true)), [
+            .checkpointUtterance(id: id, text: "النص الأول")
+        ])
+        // A replacement transcript arriving while the checkpoint write is in flight
+        // must not overwrite the archived source of truth.
+        XCTAssertTrue(r.apply(.finalTranscript(turnID: id, text: "نص بديل")).isEmpty)
+        XCTAssertEqual(r.apply(.checkpointPersisted(turnID: id)), [
+            .submitUtterance(id: id, text: "النص الأول")
+        ])
+    }
+
+    func testLateTranscriptDuringCheckpointFailedIgnored() {
+        var r = makeRunning()
+        let id = UUID()
+        r.apply(.userSpeechStarted(turnID: id, isConfirmed: true))
+        r.apply(.finalTranscript(turnID: id, text: "النص الأصلي"))
+        r.apply(.userSpeechStopped(turnID: id, semanticTurnComplete: true))
+        XCTAssertEqual(r.apply(.checkpointFailed(turnID: id)), [.showPersistenceFailure])
+        XCTAssertTrue(r.apply(.finalTranscript(turnID: id, text: "بديل")).isEmpty)
+        // Retry replays the original frozen text, not the late replacement.
+        XCTAssertEqual(r.apply(.userRetriesCheckpoint), [
+            .checkpointUtterance(id: id, text: "النص الأصلي")
+        ])
+    }
+
+    func testSuspendSkipsDraftWhileCheckpointPending() {
+        var r = makeRunning()
+        let id = UUID()
+        r.apply(.userSpeechStarted(turnID: id, isConfirmed: true))
+        r.apply(.finalTranscript(turnID: id, text: "نص محفوظ"))
+        r.apply(.userSpeechStopped(turnID: id, semanticTurnComplete: true))
+        XCTAssertEqual(r.state.turn?.checkpointPending, true)
+        let effects = r.apply(.systemInterruption)
+        // The full checkpoint write is already in flight under turn.id;
+        // a draft would duplicate it.
+        XCTAssertFalse(effects.contains(where: {
+            if case .checkpointDraft = $0 { true } else { false }
+        }))
+        XCTAssertEqual(effects, [.endMicrophone])
+    }
+
+    func testSuspendTrimsWhitespaceTranscript() {
+        var r = makeRunning()
+        let id = UUID()
+        r.apply(.userSpeechStarted(turnID: id, isConfirmed: true))
+        r.apply(.finalTranscript(turnID: id, text: "   "))
+        let effects = r.apply(.systemInterruption)
+        XCTAssertEqual(effects, [.endMicrophone])
+        XCTAssertFalse(effects.contains(where: {
+            if case .checkpointDraft = $0 { true } else { false }
+        }))
+    }
+
 }

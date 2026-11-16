@@ -41,6 +41,15 @@ enum SecretStore {
 }
 
 enum DeviceLock {
+    /// Human-readable reason device authentication cannot run, nil when it can.
+    /// The lock screen must explain itself instead of failing silently.
+    static func unavailabilityReason() -> String? {
+        let context = LAContext()
+        var error: NSError?
+        if context.canEvaluatePolicy(.deviceOwnerAuthentication, error: &error) { return nil }
+        return "المصادقة البيومترية غير متاحة على هذا الجهاز"
+    }
+
     static func authenticate() async -> Bool {
         let context = LAContext()
         var error: NSError?
