@@ -1,0 +1,14 @@
+{
+  "version": 24,
+  "python_tests": {
+    "passed": 51,
+    "failed": 0
+  },
+  "swift_core_tests": {
+    "passed": 38,
+    "exit_code": 0
+  },
+  "ios_xcode_build": "not run",
+  "iphone_device": "not tested",
+  "github": "not uploaded"
+}

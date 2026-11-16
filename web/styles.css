@@ -1,0 +1,13 @@
+:root{color-scheme:dark;font-family:system-ui,sans-serif;background:#0c1220;color:#e9efff}
+*{box-sizing:border-box}body{margin:0}main{max-width:850px;margin:auto;padding:24px}
+h1{font-size:1.7rem}section{background:#182238;border:1px solid #35435c;border-radius:16px;padding:18px;margin:16px 0}
+input,textarea,select,button{font:inherit;border-radius:9px;padding:12px}
+input,textarea,select{width:100%;background:#0b1427;color:white;border:1px solid #556782}
+button{background:#3677e8;color:white;border:0;cursor:pointer;margin:5px 0}
+button:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-visible{outline:3px solid #8ab4ff;outline-offset:2px}
+button:disabled{opacity:.5;cursor:wait}.row{display:flex;gap:8px;flex-wrap:wrap}.row>*{flex:1}
+#messages{min-height:150px;max-height:50vh;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere}
+.msg{padding:12px;border-radius:12px;margin:8px 0;background:#25334e}
+.msg.user{background:#173e62}small{color:#b5c6e2}label{display:block;margin:8px 0}
+#status{display:inline-block;margin-inline-start:10px}
+@media(max-width:520px){main{padding:12px}section{padding:14px}}

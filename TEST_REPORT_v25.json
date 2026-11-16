@@ -1,0 +1,12 @@
+{
+  "python": "51 passed",
+  "swift_core_linux": "38 passed",
+  "swift_navigation_parser_linux": "5 passed",
+  "ios_xcode": "not tested",
+  "iphone_device": "not tested",
+  "features": [
+    "allowlisted navigation preview",
+    "sheet dismissal navigation",
+    "task status filters"
+  ]
+}

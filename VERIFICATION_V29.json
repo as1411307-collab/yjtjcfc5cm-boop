@@ -1,0 +1,10 @@
+{
+  "version": "29",
+  "python_tests": "59 passed",
+  "swift_core": "38 passed",
+  "python_compileall": "passed",
+  "ios_xcode_build": "not performed",
+  "iphone_real_device": "not performed",
+  "security": "partial; see FINAL_ENGINEERING_REVIEW_V29_AR.md",
+  "generated_utc": "2026-11-15T13:46:26.722831+00:00"
+}

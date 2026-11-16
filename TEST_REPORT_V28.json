@@ -1,0 +1,9 @@
+{
+  "version": "28",
+  "python_tests": "58/58 passed",
+  "swift_core_tests_linux": "38/38 passed",
+  "python_compileall": "passed",
+  "ios_xcode_build": "not tested",
+  "ios_real_device": "not tested",
+  "production_ready": false
+}

@@ -2,6 +2,17 @@
 
 نواة تجريبية مستقلة مستوحاة من أفكار مستودعي kimi وchat-GBT. ليست نسخة منهما ولا تدعي تكامل Open Design.
 
+## V30 — التثبيت الهندسي الحالي
+
+- إصلاح اكتشاف حزمة `core` في setuptools؛ أصبح `pip install -e ".[test]"` يعمل، و`requirements.lock` يثبّت بيئة CI.
+- فصل CSS وJavaScript عن `index.html` وتقديمهما عبر `/static` مع CSP بلا `unsafe-inline`. يوجد اختبار Chromium حقيقي لإنشاء جلسة.
+- حد فعلي 128KiB أثناء قراءة جسم الطلب، بما في ذلك chunked requests بلا `Content-Length`.
+- تحديث `cryptography` إلى `>=50.0.2,<51` وإضافة `pip-audit` إلى CI.
+- إضافة `request_id` اختياري للتوافق مع العملاء القدامى؛ عملاء الويب وiOS الحاليان يرسلانه ويحتفظان به عند Retry. الرد المكتمل يُعاد دون توليد ثانٍ، والمحاولة المتزامنة تُرفض.
+- ربط قرارات خطط الوكيل بـ`session_id` في العميل والخادم، وقفل iOS وحجب المحتوى عند الانتقال للخلفية.
+- مسار تحقق حقيقي على HTTP وSQLite يشمل الحفظ وإعادة التشغيل والنسخة المشفرة والاستعادة؛ يستخدم مزود Ollama محلياً اختبارياً وليس LLM حقيقياً.
+- حالة التحقق المحدثة في `VERIFICATION_V30.json`. بناء SwiftUI/Xcode وتشغيل iPhone والميكروفون والتوقيع ما زالت غير مثبتة هنا.
+
 ## المتطلبات
 - Python 3.11+
 - Ollama مثبت ويعمل محليًا
@@ -32,7 +43,20 @@ uvicorn core.app:app --host 127.0.0.1 --port 8000
 
 ## الاختبارات
 ```bash
-pytest -q
+python -m pytest -q
+```
+لتكرار بيئة CI المقفلة:
+```bash
+pip install -r requirements.lock
+pip install -e . --no-deps
+python -m compileall -q core
+python -m pytest -q
+python -m pip_audit --local
+```
+اختبار المتصفح اختياري محلياً، ويعمل تلقائياً في CI:
+```bash
+python -m playwright install chromium
+RUN_BROWSER_TESTS=1 python -m pytest -q tests/test_web_browser.py
 ```
 
 ## API
@@ -45,7 +69,7 @@ pytest -q
 - POST /approvals/{approval_id}/decision
 - GET /audit
 
-كل المسارات عدا / و /health تتطلب ترويسة X-API-Key.
+كل مسارات API عدا `/health` تتطلب ترويسة `X-API-Key`. المساران `/` و`/static` يقدمان ملفات الواجهة فقط ولا يعرضان بيانات أو أسراراً. أرسل `request_id` فريداً مع `POST /chat`، وأعد استخدامه فقط لإعادة المحاولة نفسها؛ لا تستخدمه مع محتوى مختلف.
 
 ## Langflow (اختياري)
 اضبط LANGFLOW_URL و LANGFLOW_FLOW_ID و LANGFLOW_API_KEY إن لزم. استخدم مزود langflow من الواجهة.
@@ -56,7 +80,7 @@ pytest -q
 - مفتاح API واحد مشترك؛ لا يوجد حساب مستخدم مستقل أو عزل متعدد المستأجرين.
 - الموافقات لا تنفذ أي أدوات: هي سجل قرارات فقط.
 - لا توجد ذاكرة دلالية أو RAG بعد؛ يوجد تاريخ محادثة محدود لكل جلسة.
-- لا توجد آلية تصدير فعلي، رغم وجود نوع طلب موافقة باسم export_session.
+- تصدير المحادثة JSON متاح عبر `GET /sessions/{session_id}/export` بمفتاح API؛ طلب الموافقة `export_session` ما زال سجل قرار فقط ولا يُستخدم كتفويض للتصدير.
 - لا يوجد تشفير لقاعدة البيانات أو HTTPS مدمج.
 - لا تعرّض الخادم أو Ollama أو Langflow للإنترنت دون بوابة أمان مناسبة.
 - لا تضف أسرارًا إلى المستودع؛ احتفظ بها في متغيرات البيئة.
@@ -228,3 +252,57 @@ gh repo create unified-ai-personal --private --source=. --remote=origin --push
 - واجهة iOS تعرض الاقتراحات كأزرار تضع نص الاقتراح في خانة الإدخال دون إرساله تلقائيًا.
 - تُرفض الجلسات غير الموجودة ويجب تقديم مفتاح API؛ ولا تُعرض اقتراحات بعد تبديل المحادثة أو قفل التطبيق.
 - الاختبارات: 42 Python ناجحة و38 Swift Core ناجحة على Linux. لم يُبنَ تطبيق SwiftUI على Xcode ولم يُختبر على جهاز فعلي.
+
+
+## v21 — تسمية المحادثات وتثبيتها
+
+- يدعم الخادم `PATCH /sessions/{session_id}` مع `{ "title": "...", "pinned": true }` ومصادقة API.
+- ترحيل SQLite آلي يضيف `title` و`pinned` إلى قواعد البيانات القديمة دون مسح الرسائل.
+- تعرض قائمة المحادثات العناوين، وتضع المثبتة أولًا، وتتيح تغيير العنوان أو التثبيت بالسحب.
+- عُدلت استجابات API لإرجاع `pinned` كقيمة JSON منطقية متوافقة مع Swift `Bool`.
+- نتائج الاختبار: 45 Python و38 Swift Core على Linux. لم يُبن تطبيق iOS داخل Xcode.
+- لا تُرفع المفاتيح أو بيانات قاعدة البيانات إلى GitHub. لم يتم رفع هذا الإصدار.
+
+## v22 — Agent داخل التطبيق (معاينة ثم تنفيذ)
+- لوحة الوكيل في SwiftUI تقبل أوامر عربية/إنجليزية محددة لتسمية المحادثة وتثبيتها.
+- `POST /agent/plans` يعيد خطة دون تعديل، ثم `POST /agent/plans/{id}/decision` ينفذ أو يلغي بقرار صريح.
+- صلاحية الخطة خمس دقائق، تنفيذ مرة واحدة فقط، والتحقق من API key، والمعاملات الذرية وتسجيل التدقيق.
+- لا ينفذ الوكيل تعليمات النموذج غير الموثوقة أو أوامر النظام أو التحكم العام بالجهاز.
+- اختبارات Python: 47 ناجحة، Swift Core: 38 ناجحة على Linux.
+- لا يزال بناء SwiftUI على macOS واختبار الآيفون الفعلي غير منفذين.
+
+
+## v23 — لوحة مهام مرتبطة بالوكيل
+
+- أضيفت قاعدة بيانات `tasks` مرتبطة بكل محادثة وتُحذف تلقائيًا مع المحادثة.
+- واجهات مصادق عليها لإضافة المهام واستعراضها وتغيير حالة إنجازها وحذفها.
+- أضيف أمر وكيل جديد: `أضف مهمة: عنوان المهمة`، مع معاينة وموافقة قبل الكتابة إلى قاعدة البيانات.
+- لوحة مهام داخل تطبيق SwiftUI تتيح التحكم اليدوي بالمهام.
+- الاختبارات: 49 Python و38 Swift Core ناجحة على Linux.
+- لم يُختبر بناء واجهة iOS داخل Xcode أو على جهاز فعلي.
+- هذا وكيل محصور الصلاحيات؛ لا يتحكم عشوائيًا بكل مكونات النظام أو التطبيقات الأخرى.
+
+
+## v24 — التحكم بحالة المهام بواسطة الوكيل
+
+أوامر جديدة: `أنجز مهمة: <العنوان>`، `أكمل مهمة: <العنوان>`، `أعد فتح مهمة: <العنوان>`، وبدائل إنجليزية.
+- تعرض لوحة الوكيل معاينة قبل أي تعديل؛ لا يُنفّذ التغيير إلا بالموافقة.
+- لا يُقبل إلا تطابق وحيد لعنوان مهمة مؤهلة داخل المحادثة نفسها.
+- تحفظ الخطة معرّف المهمة وتتحقق من العنوان والحالة عند التنفيذ لتفادي تنفيذ خطة قديمة.
+- يُرفض تنفيذ الخطة مرة ثانية. لا توجد أدوات تحكم عامة بالنظام أو أذونات خارج التطبيق.
+- اختبارات Python: 51 ناجحة. اختبارات Swift Core: 38 ناجحة على Linux.
+- بناء SwiftUI في Xcode واختبار iPhone لم ينفذا بعد.
+
+## v25 — UI action navigation
+The iOS agent sheet now previews and executes allowlisted in-app navigation actions:
+Arabic/English commands for tasks, incomplete tasks, sessions, memories, and settings.
+Navigation is dispatched after the agent sheet dismisses to avoid competing SwiftUI sheets.
+Task board supports all/incomplete/completed filters. Unknown commands still go to
+the server-side confirmation workflow; no arbitrary UI automation is allowed.
+This is a bounded first step, not general multi-step agent orchestration.
+
+
+## v26 agent changes
+- Delete a task via `احذف مهمة: <title>` or `delete task: <title>`; confirmation is mandatory.
+- Pending plan quota: 20 per session.
+- See SECURITY_AUDIT_v26.md for validation and limitations.

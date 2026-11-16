@@ -1,0 +1,8 @@
+{
+  "python_tests": "55 passed",
+  "swift_core_tests": "38 passed on Linux",
+  "python_compileall": "passed",
+  "xcode_build": "not tested",
+  "real_iphone": "not tested",
+  "source_verification": "policy only; no browsing tool integrated"
+}

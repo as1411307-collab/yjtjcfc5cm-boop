@@ -1,0 +1,12 @@
+{
+  "python": "52 passed",
+  "swift_core_linux": "38 passed",
+  "python_compileall": "passed",
+  "xcode": "not tested",
+  "iphone": "not tested",
+  "changes": [
+    "atomic stale preview rejection for rename/pin",
+    "regression tests",
+    "hide internal preview keys"
+  ]
+}

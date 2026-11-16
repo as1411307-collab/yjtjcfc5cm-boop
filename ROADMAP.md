@@ -127,3 +127,53 @@
 - [x] اختبارات المصادقة، الخصوصية، الاقتراحات، وتكامل مصدر iOS.
 - [ ] تحقق Xcode من SwiftUI على macOS وiPhone.
 - [ ] رفع النسخة إلى GitHub عبر اتصال يدعم الكتابة.
+
+
+## v21
+- [x] تسمية المحادثات وتثبيتها عبر API وSwiftUI.
+- [x] ترحيل قاعدة بيانات موجودة واختبارات حماية API.
+- [x] اختبارات Python وSwift Core.
+- [ ] اختبار SwiftUI داخل Xcode وعلى iPhone فعلي.
+- [ ] إضافة اختبارات UI تلقائية للتسمية والتثبيت.
+
+## v22
+- [x] واجهة وكيل داخل التطبيق مرتبطة بخادم API.
+- [x] خطة، معاينة، تأكيد، إلغاء، انتهاء صلاحية، حماية من التكرار.
+- [x] اختبار عمليات التسمية والتثبيت والمصادقة.
+- [ ] ربط أدوات أخرى بقائمة صلاحيات لكل إجراء (الذاكرة، المهام، القوائم).
+- [ ] ربط تخطيط اللغة الطبيعية بالنموذج مع تحقق مستقل من المخرجات.
+- [ ] فحص بناء SwiftUI على Xcode واختبار واجهة الوكيل على جهاز حقيقي.
+
+
+## v23 status
+- [x] Task board server CRUD with session isolation.
+- [x] Agent task creation with explicit preview and approval.
+- [x] iOS task board screen and API integration.
+- [x] Python integration tests and Swift Core tests.
+- [ ] Full Xcode compile and physical iPhone testing.
+- [ ] Richer UI component actions with a typed, permission-scoped tool registry.
+- [ ] Live voice-to-agent tool integration and comprehensive device E2E.
+- [ ] Final cinematic theme after functionality and usability validation.
+
+
+## v24
+- [x] إكمال المهام وإعادة فتحها بأوامر الوكيل بعد الموافقة.
+- [x] منع المطابقة الغامضة وتكرار التنفيذ وتجاوز نطاق المحادثة.
+- [x] اختبارات تكامل جديدة.
+- [ ] توسيع طبقة أوامر التنقل الآمن بين شاشات التطبيق.
+- [ ] اختبار واجهة SwiftUI داخل Xcode على iPhone.
+
+
+## V30 — التثبيت وإثبات التشغيل
+- [x] إصلاح setuptools وأمر التثبيت النظيف وقفل اعتماديات CI.
+- [x] فصل أصول الويب واختبار CSP في متصفح Chromium حقيقي.
+- [x] فرض حد الجسم أثناء القراءة، بما في ذلك chunked requests.
+- [x] تحديث cryptography وإضافة فحص pip-audit.
+- [x] منع ازدواج المحادثة عبر request_id وحجز المحاولة في SQLite.
+- [x] ربط قرارات الوكيل بـsession_id وقفل iOS عند الخلفية.
+- [x] اختبار HTTP فعلي للحفظ وإعادة التشغيل والاستعادة مع مزود اختباري محلي.
+- [ ] تشغيل GitHub Actions على المستودع الفعلي وإغلاق أي فشل ظاهر.
+- [ ] بناء SwiftUI على macOS ثم Xcode Cloud وTestFlight على iPhone.
+- [ ] اختبار Ollama أو Langflow الحقيقي وقياس الاستجابة وانقطاع الشبكة.
+- [ ] اختبار الميكروفون والمقاطعات وBluetooth وFace ID على الجهاز الفعلي.
+- [ ] توصيل VoiceInteractionCore effects وdurable checkpoints قبل أي ادعاء صوتي متقدم.

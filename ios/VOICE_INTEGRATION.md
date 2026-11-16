@@ -21,3 +21,11 @@ Next reliability milestone: connect all reducer VoiceEffect cases to an effect r
 - بداية تسجيل جديدة تقاطع الرد الجاري وتلغي الطلب المحلي القديم.
 - اختبارات `test_ios_voice_integration.py` تتحقق من وجود هذه الوصلات في مصدر iOS؛ لا تغني عن اختبارات Xcode الفعلية.
 - لا توجد محادثة WebRTC فورية في هذا الإصدار؛ المسار ما زال Speech → Text → AI → Speech.
+
+
+## V30 — حدود الحماية الحالية
+
+- يقفل التطبيق عند `scenePhase == .background` ويحجب المحتوى أثناء عدم النشاط؛ يلزم التحقق من السلوك على iPhone فعلي.
+- ترتبط نتيجة التعرف المتأخرة بالمحادثة التي بدأ فيها التسجيل، فلا تُرسل إلى محادثة بديلة.
+- تحمل محادثات النص `request_id` لمنع الازدواج عند Retry؛ لا يعني ذلك أن إلغاء العميل يوقف توليد النموذج على الخادم.
+- لم تُوصل جميع VoiceInteractionCore effects أو durable utterance checkpoints. لا يوجد ادعاء Full-duplex أو realtime أو إلغاء صوتي مكتمل.

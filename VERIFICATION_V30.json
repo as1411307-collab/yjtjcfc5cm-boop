@@ -1,0 +1,27 @@
+{
+  "version": "30",
+  "generated_utc": "2026-11-15T15:28:05Z",
+  "source_v29_sha256": "5988f40719c72c3c0fa37773043cd3d7974e893203b5c1e42198b863bfcc3e22",
+  "clean_install": "passed: requirements.lock followed by editable install with --no-deps",
+  "python_compileall": "passed",
+  "python_tests": "67 passed, 1 skipped (opt-in browser test)",
+  "chromium_browser": "1 passed: JavaScript and CSS allowed by strict CSP; real session created",
+  "real_http_flow": "passed: real Core HTTP + provider HTTP + SQLite persistence + idempotent replay + restart + encrypted backup restore; deterministic local Ollama stub, not a real LLM",
+  "coverage": "88% total for core",
+  "bandit": "0 findings in core",
+  "pip_audit": "No known vulnerabilities found in the clean locked environment; local project skipped because it is not a PyPI dependency",
+  "dependency_lock": "50 pinned packages; cryptography 50.0.2",
+  "swift_core": "not rerun: Swift toolchain unavailable in this environment",
+  "ios_xcode_build": "not performed",
+  "iphone_real_device": "not performed",
+  "real_llm_provider": "not performed",
+  "github_upload": "not performed",
+  "production_ready": false,
+  "remaining_gates": [
+    "Run GitHub Actions on the actual repository",
+    "Build SwiftUI on macOS and distribute through Xcode Cloud/TestFlight",
+    "Test the physical iPhone, Face ID, microphone, interruptions and networking",
+    "Verify a real Ollama or Langflow provider and measure response behavior",
+    "Complete VoiceInteractionCore effect runner and durable checkpoints before advanced voice claims"
+  ]
+}

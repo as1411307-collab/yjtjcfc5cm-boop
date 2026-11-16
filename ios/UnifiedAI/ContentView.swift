@@ -6,7 +6,9 @@ struct ContentView: View {
     @AppStorage("sessionID") private var sessionID = ""
     @State private var apiKey = ""
     @State private var input = ""
+    @State private var voiceReplyPending = false
     @State private var provider = "ollama"
+    @AppStorage("reviewVoiceTranscript") private var reviewVoiceTranscript = true
     @State private var messages: [ChatMessage] = []
     @State private var historyCursor = 0
     @State private var hasMoreHistory = false
@@ -17,7 +19,20 @@ struct ContentView: View {
     @State private var busy = false
     @State private var chatTask: Task<Void, Never>?
     @State private var requestGeneration = UUID()
+    @State private var retryRequestID: String?
+    @State private var retryFingerprint = ""
+    @State private var voiceSessionID = ""
     @State private var notice = ""
+    @State private var showAgent = false
+    @State private var showTaskBoard = false
+    @State private var boardTasks: [BoardTask] = []
+    @State private var boardTaskTitle = ""
+    @State private var agentCommand = ""
+    @State private var agentPlan: AgentPlan?
+    @State private var agentBusy = false
+    @State private var localNavigationPlan: LocalNavigationAction?
+    @State private var pendingNavigation: LocalNavigationAction?
+    @State private var navigationFilter = "all"
     @State private var showSettings = false
     @State private var showMemories = false
     @State private var showSessions = false
@@ -25,6 +40,8 @@ struct ContentView: View {
     @State private var sessionSearch = ""
     @State private var exportedConversationURL: URL?
     @State private var recentSessions: [ConversationSummary] = []
+    @State private var editingSession: ConversationSummary?
+    @State private var editedTitle = ""
     @State private var personalMemories: [PersonalMemory] = []
     @State private var newMemory = ""
     @StateObject private var voice = NativeVoiceService()
@@ -36,6 +53,16 @@ struct ContentView: View {
                   key: SecretStore.load() ?? "")
     }
 
+    @MainActor
+    private func authenticateUnlock() async {
+        let authenticated = await DeviceLock.authenticate()
+        guard scenePhase == .active else {
+            unlocked = false
+            return
+        }
+        unlocked = authenticated
+    }
+
     var body: some View {
         NavigationStack {
             Group {
@@ -44,7 +71,7 @@ struct ContentView: View {
                         Image(systemName: "lock.shield").font(.system(size: 55))
                         Text("مساعدك الشخصي").font(.title2.bold())
                         Button("فتح باستخدام Face ID أو رمز الجهاز") {
-                            Task { unlocked = await DeviceLock.authenticate() }
+                            Task { await authenticateUnlock() }
                         }.buttonStyle(.borderedProminent)
                     }.frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else if SecretStore.load() == nil || serverURL.isEmpty || showSettings {
@@ -56,9 +83,10 @@ struct ContentView: View {
             .navigationTitle("Unified AI")
             .onAppear {
                 voice.onFinalTranscript = { text in
-                    guard unlocked, !busy, scenePhase == .active else { return }
+                    guard unlocked, !busy, scenePhase == .active, voiceSessionID == sessionID else { return }
                     input = text
-                    startSend(speakAnswer: true)
+                    voiceReplyPending = reviewVoiceTranscript
+                    if !reviewVoiceTranscript { startSend(speakAnswer: true) }
                 }
             }
             .onChange(of: scenePhase) { _, phase in
@@ -67,6 +95,10 @@ struct ContentView: View {
                     voice.stopAll()
                     voicePolicy.appBecameInactive()
                     clearExportFile()
+                }
+                if phase == .background {
+                    agentPlan = nil
+                    unlocked = false
                 }
             }
             .confirmationDialog(
@@ -81,10 +113,25 @@ struct ContentView: View {
             } message: {
                 Text("سيُحذف سجل هذه المحادثة من قاعدة البيانات. قد تبقى نسخ سابقة في النسخ الاحتياطية وسجلات التدقيق.")
             }
+            .sheet(isPresented: $showAgent, onDismiss: { performPendingNavigation() }) { agentSheet }
+            .sheet(isPresented: $showTaskBoard) { taskBoardSheet }
             .sheet(isPresented: $showMemories) { memorySheet }
             .sheet(isPresented: $showSessions) { sessionsSheet }
             .toolbar {
                 if unlocked {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button {
+                            showTaskBoard = true
+                            Task { await loadBoardTasks() }
+                        } label: {
+                            Label("المهام", systemImage: "checklist")
+                        }
+                    }
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button { showAgent = true } label: {
+                            Label("الوكيل", systemImage: "wand.and.stars")
+                        }
+                    }
                     ToolbarItem(placement: .topBarTrailing) {
                         Button { showSettings.toggle() } label: {
                             Image(systemName: "gearshape")
@@ -111,10 +158,245 @@ struct ContentView: View {
         }
         .environment(\\.layoutDirection, .rightToLeft)
         .task {
-            unlocked = await DeviceLock.authenticate()
+            await authenticateUnlock()
             if unlocked && !sessionID.isEmpty && SecretStore.load() != nil {
                 await loadHistory()
             }
+        }
+        .overlay {
+            if scenePhase != .active {
+                ZStack {
+                    Color(.systemBackground).ignoresSafeArea()
+                    VStack(spacing: 12) {
+                        Image(systemName: "lock.shield").font(.system(size: 44))
+                        Text("المحتوى محمي")
+                    }
+                }
+                .accessibilityLabel("المحتوى محمي أثناء عدم نشاط التطبيق")
+            }
+        }
+    }
+
+    private var agentSheet: some View {
+        NavigationStack {
+            Form {
+                Section("الوكيل التفاعلي") {
+                    Text("أوامر التنقل: افتح المهام، افتح الإعدادات، افتح المحادثات، افتح الذاكرة، اعرض المهام غير المنجزة. وأوامر تعديل البيانات تتطلب موافقة الخادم.")
+                        .font(.footnote)
+                    TextField("اكتب أمرًا واضحًا", text: $agentCommand)
+                        .textInputAutocorrectionDisabled()
+                    Button("معاينة الأمر") {
+                        Task { await previewAgentCommand() }
+                    }
+                    .disabled(agentBusy || sessionID.isEmpty || agentCommand.isEmpty)
+                }
+                if let localNavigationPlan {
+                    Section("معاينة التنقل داخل التطبيق") {
+                        Text(localNavigationPlan.description)
+                        Button("تنفيذ التنقل") { executeLocalNavigation() }
+                        Button("إلغاء", role: .cancel) { localNavigationPlan = nil }
+                    }
+                }
+                if let agentPlan {
+                    Section("معاينة قبل التنفيذ") {
+                        Text(agentPlan.action == "rename_session" ? "تغيير عنوان المحادثة" : (agentPlan.action == "create_task" ? "إضافة مهمة إلى لوحة العمل" : (agentPlan.action == "set_task_status" ? "تحديث حالة المهمة" : (agentPlan.action == "delete_task" ? "حذف مهمة من لوحة العمل" : "تغيير تثبيت المحادثة"))))
+                        ForEach(agentPlan.payload.keys.filter { $0 != "task_id" && !$0.hasPrefix("_") }.sorted(), id: \.self) { key in
+                            if let value = agentPlan.payload[key] {
+                                LabeledContent(key, value: value.display)
+                            }
+                        }
+                        Button("تأكيد وتنفيذ") {
+                            Task { await decideAgent(execute: true) }
+                        }
+                        .disabled(agentBusy)
+                        Button("إلغاء الأمر", role: .cancel) {
+                            Task { await decideAgent(execute: false) }
+                        }
+                        .disabled(agentBusy)
+                    }
+                }
+            }
+            .navigationTitle("الوكيل")
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("إغلاق") { showAgent = false }
+                }
+            }
+        }
+    }
+
+    private func previewAgentCommand() async {
+        guard unlocked, scenePhase == .active, !sessionID.isEmpty else { return }
+        agentBusy = true
+        defer { agentBusy = false }
+        agentPlan = nil
+        localNavigationPlan = nil
+        if let navigation = LocalNavigationAction.parse(agentCommand) {
+            localNavigationPlan = navigation
+            return
+        }
+        do {
+            agentPlan = try await client.planAgentAction(session: sessionID, command: agentCommand)
+        } catch {
+            notice = error.localizedDescription
+        }
+    }
+
+    private func executeLocalNavigation() {
+        guard unlocked, scenePhase == .active, let action = localNavigationPlan else { return }
+        localNavigationPlan = nil
+        pendingNavigation = action
+        showAgent = false
+    }
+
+    private func performPendingNavigation() {
+        guard let action = pendingNavigation else { return }
+        pendingNavigation = nil
+        guard unlocked, scenePhase == .active else { return }
+        switch action {
+        case .tasks:
+            navigationFilter = "all"
+            showTaskBoard = true
+            Task { await loadBoardTasks() }
+        case .incompleteTasks:
+            navigationFilter = "incomplete"
+            showTaskBoard = true
+            Task { await loadBoardTasks() }
+        case .sessions:
+            showSessions = true
+            Task { await loadSessions() }
+        case .memories:
+            showMemories = true
+            Task { await loadMemories() }
+        case .settings:
+            showSettings = true
+        }
+    }
+
+    private func decideAgent(execute: Bool) async {
+        guard unlocked, scenePhase == .active, let plan = agentPlan else { return }
+        guard plan.session_id == sessionID else {
+            agentPlan = nil
+            _ = try? await client.decideAgentAction(planID: plan.plan_id, session: plan.session_id, execute: false)
+            notice = "تغيرت المحادثة؛ أُلغيت المعاينة القديمة دون تنفيذ"
+            return
+        }
+        agentBusy = true
+        defer { agentBusy = false }
+        do {
+            let result = try await client.decideAgentAction(planID: plan.plan_id, session: sessionID, execute: execute)
+            agentPlan = nil
+            if result.status == "executed" {
+                await loadSessions()
+                await loadBoardTasks()
+                notice = "تم تنفيذ الأمر بنجاح"
+            } else {
+                notice = result.status == "expired" ? "انتهت صلاحية الأمر" : "تم إلغاء الأمر"
+            }
+        } catch {
+            notice = error.localizedDescription
+        }
+    }
+
+    private var taskBoardSheet: some View {
+        NavigationStack {
+            Form {
+                Section("مهمة جديدة") {
+                    TextField("اسم المهمة", text: $boardTaskTitle)
+                    Button("إضافة") {
+                        Task { await addBoardTask() }
+                    }
+                    .disabled(sessionID.isEmpty || boardTaskTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+                Section("مهام المحادثة") {
+                    Picker("عرض المهام", selection: $navigationFilter) {
+                        Text("الكل").tag("all")
+                        Text("غير المنجزة").tag("incomplete")
+                        Text("المنجزة").tag("done")
+                    }
+                    .pickerStyle(.segmented)
+                    if sessionID.isEmpty {
+                        Text("ابدأ محادثة أولاً").foregroundStyle(.secondary)
+                    }
+                    ForEach(boardTasks.filter { navigationFilter == "all" || (navigationFilter == "done" ? $0.done : !$0.done) }) { task in
+                        HStack {
+                            Button {
+                                Task { await changeBoardTask(task, done: !task.done) }
+                            } label: {
+                                Image(systemName: task.done ? "checkmark.circle.fill" : "circle")
+                            }
+                            .buttonStyle(.plain)
+                            Text(task.title)
+                                .strikethrough(task.done)
+                            Spacer()
+                            Button(role: .destructive) {
+                                Task { await deleteBoardTask(task) }
+                            } label: {
+                                Image(systemName: "trash")
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                }
+            }
+            .navigationTitle("لوحة المهام")
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("إغلاق") { showTaskBoard = false }
+                }
+            }
+        }
+    }
+
+    private func loadBoardTasks() async {
+        guard unlocked, scenePhase == .active, !sessionID.isEmpty else {
+            boardTasks = []
+            return
+        }
+        let selected = sessionID
+        do {
+            let loaded = try await client.boardTasks(session: selected)
+            guard unlocked, sessionID == selected, scenePhase == .active else { return }
+            boardTasks = loaded
+        } catch {
+            notice = error.localizedDescription
+        }
+    }
+
+    private func addBoardTask() async {
+        guard unlocked, scenePhase == .active, !sessionID.isEmpty else { return }
+        let selected = sessionID
+        do {
+            try await client.addBoardTask(session: selected, title: boardTaskTitle)
+            guard unlocked, sessionID == selected else { return }
+            boardTaskTitle = ""
+            await loadBoardTasks()
+        } catch {
+            notice = error.localizedDescription
+        }
+    }
+
+    private func changeBoardTask(_ task: BoardTask, done: Bool) async {
+        guard unlocked, scenePhase == .active, !sessionID.isEmpty else { return }
+        let selected = sessionID
+        do {
+            try await client.updateBoardTask(session: selected, task: task.id, done: done)
+            guard unlocked, sessionID == selected else { return }
+            await loadBoardTasks()
+        } catch {
+            notice = error.localizedDescription
+        }
+    }
+
+    private func deleteBoardTask(_ task: BoardTask) async {
+        guard unlocked, scenePhase == .active, !sessionID.isEmpty else { return }
+        let selected = sessionID
+        do {
+            try await client.deleteBoardTask(session: selected, task: task.id)
+            guard unlocked, sessionID == selected else { return }
+            await loadBoardTasks()
+        } catch {
+            notice = error.localizedDescription
         }
     }
 
@@ -125,7 +407,7 @@ struct ContentView: View {
                     Task {
                         do {
                             let result = try await client.readiness()
-                            serverStatus = result.status == "ready" ? "الخادم وقاعدة البيانات جاهزان" : "حالة الخادم: \\(result.status)"
+                            serverStatus = result.status == "ready" ? "الخادم وقاعدة البيانات جاهزان" : "حالة الخادم: \(result.status)"
                         } catch {
                             serverStatus = error.localizedDescription
                         }
@@ -221,6 +503,8 @@ struct ContentView: View {
                     cancelPendingChat()
                     voice.stopAll()
                     voicePolicy.stopSession()
+                    agentPlan = nil
+                    localNavigationPlan = nil
                     sessionID = item.id
                     insights = nil
                     messages = []
@@ -229,11 +513,47 @@ struct ContentView: View {
                     Task { await loadHistory() }
                 } label: {
                     VStack(alignment: .leading, spacing: 4) {
-                        Text(item.id == sessionID ? "المحادثة الحالية" : "محادثة محفوظة")
+                        Text(item.title.isEmpty ? (item.id == sessionID ? "المحادثة الحالية" : "محادثة محفوظة") : item.title)
+                        if item.pinned { Label("مثبتة", systemImage: "pin.fill").font(.caption) }
                         Text("\(item.message_count) رسالة • \(Date(timeIntervalSince1970: TimeInterval(item.created_at)), style: .date)")
                             .font(.caption).foregroundStyle(.secondary)
                     }
                 }
+                .swipeActions(edge: .trailing) {
+                    Button {
+                        Task {
+                            do {
+                                try await client.updateSession(item.id, title: item.title, pinned: !item.pinned)
+                                await loadSessions()
+                            } catch { notice = error.localizedDescription }
+                        }
+                    } label: {
+                        Label(item.pinned ? "إلغاء التثبيت" : "تثبيت", systemImage: "pin")
+                    }
+                    Button {
+                        editedTitle = item.title
+                        editingSession = item
+                    } label: {
+                        Label("تسمية", systemImage: "pencil")
+                    }
+                }
+            }
+            .alert("تسمية المحادثة", isPresented: Binding(
+                get: { editingSession != nil },
+                set: { if !$0 { editingSession = nil } }
+            )) {
+                TextField("عنوان المحادثة", text: $editedTitle)
+                Button("حفظ") {
+                    guard let item = editingSession else { return }
+                    editingSession = nil
+                    Task {
+                        do {
+                            try await client.updateSession(item.id, title: String(editedTitle.prefix(80)), pinned: item.pinned)
+                            await loadSessions()
+                        } catch { notice = error.localizedDescription }
+                    }
+                }
+                Button("إلغاء", role: .cancel) { editingSession = nil }
             }
             .safeAreaInset(edge: .top) {
                 HStack {
@@ -318,13 +638,13 @@ struct ContentView: View {
                         Label("اقتراحات ذكية للمتابعة", systemImage: "sparkles")
                             .font(.footnote.bold())
                         Spacer()
-                        Text("\\(insights.message_count) رسالة")
+                        Text("\(insights.message_count) رسالة")
                             .font(.caption2)
                             .foregroundStyle(.secondary)
                     }
                     ScrollView(.horizontal) {
                         HStack {
-                            ForEach(insights.suggestions, id: \\.self) { suggestion in
+                            ForEach(insights.suggestions, id: \.self) { suggestion in
                                 Button(suggestion) { input = suggestion }
                                     .buttonStyle(.bordered)
                                     .font(.caption)
@@ -359,6 +679,10 @@ struct ContentView: View {
                 }
                 .buttonStyle(.borderedProminent)
                 
+                if !reviewVoiceTranscript && voice.speaking {
+                    Text("يمكنك إيقاف الصوت دون إلغاء المهمة")
+                        .font(.caption2).foregroundStyle(.secondary)
+                }
                 if busy {
                     Button("إلغاء الإجابة") { cancelPendingChat() }
                         .buttonStyle(.bordered)
@@ -369,8 +693,11 @@ struct ContentView: View {
                 }
             }
             .padding(.bottom, 8)
+            Toggle("مراجعة الكلام قبل الإرسال", isOn: $reviewVoiceTranscript)
+                .font(.footnote)
+                .padding(.horizontal)
             if voice.recording {
-                Text(voice.transcript.isEmpty ? "أستمع إليك..." : voice.transcript)
+                Text(voice.transcript.isEmpty ? "أستمع إليك حتى تنهي كلامك..." : voice.transcript)
                     .font(.footnote).foregroundStyle(.secondary).padding(.horizontal)
             }
             if let error = voice.errorMessage {
@@ -395,6 +722,10 @@ struct ContentView: View {
                     cancelPendingChat()
                     voice.stopAll()
                     voicePolicy.stopSession()
+                    agentPlan = nil
+                    localNavigationPlan = nil
+                    retryRequestID = nil
+                    retryFingerprint = ""
                     sessionID = ""
                     insights = nil
                 historyCursor = 0
@@ -423,6 +754,11 @@ struct ContentView: View {
             guard sessionID == deleting else { return }
             sessionID = ""
             insights = nil
+            agentPlan = nil
+            retryRequestID = nil
+            retryFingerprint = ""
+            historyCursor = 0
+            hasMoreHistory = false
             messages = []
             input = ""
         } catch {
@@ -470,6 +806,7 @@ struct ContentView: View {
         } else {
             cancelPendingChat()
             voice.stopSpeech()
+            voiceSessionID = sessionID
             voicePolicy.configureConnected(true)
             let permitted = await voice.authorize()
             voicePolicy.updateMicrophonePermission(permitted)
@@ -529,9 +866,11 @@ struct ContentView: View {
 
     private func startSend(speakAnswer: Bool = false) {
         guard !busy else { return }
+        let shouldSpeak = speakAnswer || voiceReplyPending
+        voiceReplyPending = false
         let generation = UUID()
         requestGeneration = generation
-        chatTask = Task { await send(speakAnswer: speakAnswer, generation: generation) }
+        chatTask = Task { await send(speakAnswer: shouldSpeak, generation: generation) }
     }
 
     private func send(speakAnswer: Bool, generation: UUID) async {
@@ -554,12 +893,24 @@ struct ContentView: View {
             } else {
                 currentSession = sessionID
             }
-            let answer = try await client.send(session: currentSession, message: text, provider: provider)
+            let selectedProvider = provider
+            let fingerprint = "\(currentSession)\u{1F}\(selectedProvider)\u{1F}\(text)"
+            let requestID: String
+            if retryFingerprint == fingerprint, let savedID = retryRequestID {
+                requestID = savedID
+            } else {
+                requestID = UUID().uuidString
+            }
+            retryFingerprint = fingerprint
+            retryRequestID = requestID
+            let answer = try await client.send(session: currentSession, message: text, provider: selectedProvider, requestID: requestID)
             try Task.checkCancellation()
             guard requestGeneration == generation, unlocked, scenePhase == .active else { return }
             messages.append(ChatMessage(role: "user", content: text))
             messages.append(ChatMessage(role: "assistant", content: answer))
             input = ""
+            retryRequestID = nil
+            retryFingerprint = ""
             if speakAnswer { voice.speak(answer) }
             await refreshInsights(for: currentSession)
         } catch is CancellationError {

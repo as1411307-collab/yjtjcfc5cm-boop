@@ -15,6 +15,8 @@ final class NativeVoiceService: NSObject, ObservableObject, AVSpeechSynthesizerD
     private var recognizer = SFSpeechRecognizer(locale: Locale(identifier: "ar-SA"))
     private var generation = UUID()
     private var finalDelivered = false
+    private var awaitingFinal = false
+    private var finalizationTask: Task<Void, Never>?
     var onFinalTranscript: ((String) -> Void)?
     var onRecordingStopped: (() -> Void)?
 
@@ -44,6 +46,8 @@ final class NativeVoiceService: NSObject, ObservableObject, AVSpeechSynthesizerD
         errorMessage = nil
         transcript = ""
         finalDelivered = false
+        awaitingFinal = false
+        finalizationTask?.cancel()
         let token = UUID()
         generation = token
         guard let recognizer, recognizer.isAvailable else {
@@ -94,10 +98,19 @@ final class NativeVoiceService: NSObject, ObservableObject, AVSpeechSynthesizerD
         audioEngine.inputNode.removeTap(onBus: 0)
         request?.endAudio()
         if submit {
-            // Allow a final recognizer callback briefly; the caller can also submit the
-            // best available partial transcript immediately if no final result arrives.
-            deliverFinal()
+            // Give Speech a bounded window to deliver its final hypothesis.
+            // A partial transcript is used only after the timeout, never at a pause.
+            awaitingFinal = true
+            let token = generation
+            finalizationTask?.cancel()
+            finalizationTask = Task { @MainActor [weak self] in
+                try? await Task.sleep(for: .milliseconds(700))
+                guard !Task.isCancelled, let self, self.generation == token else { return }
+                self.deliverFinal()
+            }
         } else {
+            awaitingFinal = false
+            finalizationTask?.cancel()
             generation = UUID()
             recognitionTask?.cancel()
             recognitionTask = nil
@@ -107,14 +120,15 @@ final class NativeVoiceService: NSObject, ObservableObject, AVSpeechSynthesizerD
     }
 
     private func deliverFinal() {
-        guard !finalDelivered else { return }
+        guard !finalDelivered, awaitingFinal else { return }
         let value = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !value.isEmpty else { return }
         finalDelivered = true
+        awaitingFinal = false
+        finalizationTask?.cancel()
         recognitionTask?.cancel()
         recognitionTask = nil
         request = nil
-        onFinalTranscript?(value)
+        if !value.isEmpty { onFinalTranscript?(value) }
     }
 
     func speak(_ text: String) {
@@ -122,7 +136,9 @@ final class NativeVoiceService: NSObject, ObservableObject, AVSpeechSynthesizerD
         guard !text.isEmpty else { return }
         let utterance = AVSpeechUtterance(string: text)
         utterance.voice = AVSpeechSynthesisVoice(language: "ar-SA")
-        utterance.rate = AVSpeechUtteranceDefaultSpeechRate
+        utterance.rate = AVSpeechUtteranceDefaultSpeechRate * 0.88
+        utterance.preUtteranceDelay = 0.12
+        utterance.postUtteranceDelay = 0.08
         speaking = true
         synthesizer.speak(utterance)
     }

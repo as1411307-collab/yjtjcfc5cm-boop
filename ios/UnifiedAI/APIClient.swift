@@ -1,11 +1,16 @@
 import Foundation
 
 struct SessionResponse: Decodable { let session_id: String }
-struct ChatResponse: Decodable { let answer: String }
+struct ChatResponse: Decodable {
+    let answer: String
+    let request_id: String?
+    let idempotent_replay: Bool?
+}
 struct ChatRequest: Encodable {
     let session_id: String
     let message: String
     let provider: String
+    let request_id: String
 }
 struct ChatMessage: Identifiable {
     let id = UUID()
@@ -20,16 +25,18 @@ struct MessageHistory: Decodable {
     let messages: [Entry]
 }
 enum APIError: LocalizedError {
-    case invalidURL, unauthorized, server(Int), invalidResponse
+    case invalidURL, unauthorized, server(Int), serverMessage(String), invalidResponse
     var errorDescription: String? {
         switch self {
         case .invalidURL: return "عنوان الخادم غير صالح أو لا يستخدم HTTPS"
         case .unauthorized: return "مفتاح الوصول غير صحيح"
         case .server(let code): return "خطأ الخادم: \(code)"
+        case .serverMessage(let message): return message
         case .invalidResponse: return "استجابة غير صالحة"
         }
     }
 }
+private struct APIErrorDetail: Decodable { let detail: String }
 struct APIClient {
     let server: String
     let key: String
@@ -44,7 +51,7 @@ struct APIClient {
         }
         var request = URLRequest(url: url)
         request.httpMethod = method
-        request.timeoutInterval = 100
+        request.timeoutInterval = 115
         request.setValue(key, forHTTPHeaderField: "X-API-Key")
         if let body {
             request.httpBody = body
@@ -59,7 +66,13 @@ struct APIClient {
         let (data, response) = try await session.data(for: request)
         guard let response = response as? HTTPURLResponse else { throw APIError.invalidResponse }
         if response.statusCode == 401 { throw APIError.unauthorized }
-        guard (200...299).contains(response.statusCode) else { throw APIError.server(response.statusCode) }
+        guard (200...299).contains(response.statusCode) else {
+            if let error = try? JSONDecoder().decode(APIErrorDetail.self, from: data),
+               !error.detail.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                throw APIError.serverMessage(error.detail)
+            }
+            throw APIError.server(response.statusCode)
+        }
         return try JSONDecoder().decode(T.self, from: data)
     }
 
@@ -82,8 +95,8 @@ struct APIClient {
         return result.session_id
     }
 
-    func send(session: String, message: String, provider: String) async throws -> String {
-        let body = try JSONEncoder().encode(ChatRequest(session_id: session, message: message, provider: provider))
+    func send(session: String, message: String, provider: String, requestID: String) async throws -> String {
+        let body = try JSONEncoder().encode(ChatRequest(session_id: session, message: message, provider: provider, request_id: requestID))
         let result: ChatResponse = try await request("/chat", method: "POST", body: body)
         return result.answer
     }
@@ -152,11 +165,21 @@ struct ConversationSummary: Identifiable, Decodable {
     let created_at: Int
     let message_count: Int
     let last_message_at: Int?
+    let title: String
+    let pinned: Bool
 }
 struct ConversationListResponse: Decodable {
     let sessions: [ConversationSummary]
 }
 extension APIClient {
+    func updateSession(_ session: String, title: String, pinned: Bool) async throws {
+        guard session.range(of: "^[A-Za-z0-9_-]{1,100}$", options: .regularExpression) != nil else {
+            throw APIError.invalidURL
+        }
+        let body = try JSONEncoder().encode(SessionUpdateRequest(title: title, pinned: pinned))
+        let _: SessionUpdateResponse = try await request("/sessions/\(session)", method: "PATCH", body: body)
+    }
+
     func sessions() async throws -> [ConversationSummary] {
         let result: ConversationListResponse = try await request("/sessions")
         return result.sessions
@@ -216,4 +239,112 @@ struct ConversationInsights: Decodable {
     let assistant_turns: Int
     let suggestions: [String]
     let source: String
+}
+
+private struct SessionUpdateRequest: Encodable {
+    let title: String
+    let pinned: Bool
+}
+private struct SessionUpdateResponse: Decodable {
+    let id: String
+    let title: String
+    let pinned: Bool
+}
+
+struct AgentPlan: Decodable, Identifiable {
+    var id: String { plan_id }
+    let plan_id: String
+    let session_id: String
+    let action: String
+    let payload: [String: StringOrBool]
+    let requires_confirmation: Bool
+    let expires_at: Int
+}
+
+enum StringOrBool: Codable {
+    case string(String), bool(Bool)
+    init(from decoder: Decoder) throws {
+        let value = try decoder.singleValueContainer()
+        if let string = try? value.decode(String.self) { self = .string(string); return }
+        self = .bool(try value.decode(Bool.self))
+    }
+    func encode(to encoder: Encoder) throws {
+        var value = encoder.singleValueContainer()
+        switch self {
+        case .string(let string): try value.encode(string)
+        case .bool(let bool): try value.encode(bool)
+        }
+    }
+    var display: String {
+        switch self {
+        case .string(let string): return string
+        case .bool(let bool): return bool ? "نعم" : "لا"
+        }
+    }
+}
+
+struct AgentCommandRequest: Encodable {
+    let session_id: String
+    let command: String
+}
+struct AgentDecisionRequest: Encodable {
+    let execute: Bool
+    let session_id: String
+}
+struct AgentDecisionResponse: Decodable { let status: String }
+
+extension APIClient {
+    func planAgentAction(session: String, command: String) async throws -> AgentPlan {
+        let body = try JSONEncoder().encode(AgentCommandRequest(session_id: session, command: command))
+        return try await request("/agent/plans", method: "POST", body: body)
+    }
+
+    func decideAgentAction(planID: String, session: String, execute: Bool) async throws -> AgentDecisionResponse {
+        guard planID.range(of: "^[A-Za-z0-9_-]{1,100}$", options: .regularExpression) != nil,
+              session.range(of: "^[A-Za-z0-9_-]{1,100}$", options: .regularExpression) != nil else {
+            throw APIError.invalidURL
+        }
+        let body = try JSONEncoder().encode(AgentDecisionRequest(execute: execute, session_id: session))
+        return try await request("/agent/plans/\(planID)/decision", method: "POST", body: body)
+    }
+}
+
+
+struct BoardTask: Identifiable, Decodable {
+    let id: String
+    let title: String
+    let done: Bool
+}
+private struct BoardTaskList: Decodable {
+    let tasks: [BoardTask]
+}
+private struct BoardTaskInput: Encodable {
+    let title: String
+}
+private struct BoardTaskStatus: Decodable {
+    let id: String
+    let done: Bool
+}
+extension APIClient {
+    func boardTasks(session: String) async throws -> [BoardTask] {
+        let result: BoardTaskList = try await request("/sessions/\(session)/tasks")
+        return result.tasks
+    }
+
+    func addBoardTask(session: String, title: String) async throws {
+        let body = try JSONEncoder().encode(BoardTaskInput(title: title))
+        let _: BoardTask = try await request("/sessions/\(session)/tasks", method: "POST", body: body)
+    }
+
+    func updateBoardTask(session: String, task: String, done: Bool) async throws {
+        let _: BoardTaskStatus = try await request(
+            "/sessions/\(session)/tasks/\(task)?done=\(done)", method: "PATCH"
+        )
+    }
+
+    func deleteBoardTask(session: String, task: String) async throws {
+        let _: DeleteMemoryResponse = try await request(
+            "/sessions/\(session)/tasks/\(task)", method: "DELETE"
+        )
+    }
 }
