@@ -56,7 +56,7 @@ final class NativeVoiceService: NSObject, ObservableObject, AVSpeechSynthesizerD
         }
         do {
             let session = AVAudioSession.sharedInstance()
-            try session.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker, .allowBluetoothHFP])
+            try session.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker, .allowBluetooth])
             try session.setActive(true)
             let input = audioEngine.inputNode
             let format = input.outputFormat(forBus: 0)
