@@ -197,33 +197,10 @@ struct ContentView: View {
             Form {
                 agentCommandControls
                 if let localNavigationPlan {
-                    Group {
-                        Text("معاينة التنقل داخل التطبيق")
-                            .font(.headline)
-                        Text(localNavigationPlan.description)
-                        Button("تنفيذ التنقل") { executeLocalNavigation() }
-                        Button("إلغاء", role: .cancel) { localNavigationPlan = nil }
-                    }
+                    agentNavigationPreview(localNavigationPlan)
                 }
                 if let agentPlan {
-                    Group {
-                        Text("معاينة قبل التنفيذ")
-                            .font(.headline)
-                        Text(agentPlan.action == "rename_session" ? "تغيير عنوان المحادثة" : (agentPlan.action == "create_task" ? "إضافة مهمة إلى لوحة العمل" : (agentPlan.action == "set_task_status" ? "تحديث حالة المهمة" : (agentPlan.action == "delete_task" ? "حذف مهمة من لوحة العمل" : "تغيير تثبيت المحادثة"))))
-                        ForEach(agentPlan.payload.keys.filter { $0 != "task_id" && !$0.hasPrefix("_") }.sorted(), id: \.self) { key in
-                            if let value = agentPlan.payload[key] {
-                                LabeledContent(key, value: value.display)
-                            }
-                        }
-                        Button("تأكيد وتنفيذ") {
-                            Task { await decideAgent(execute: true) }
-                        }
-                        .disabled(agentBusy)
-                        Button("إلغاء الأمر", role: .cancel) {
-                            Task { await decideAgent(execute: false) }
-                        }
-                        .disabled(agentBusy)
-                    }
+                    agentActionPreview(agentPlan)
                 }
             }
             .navigationTitle("الوكيل")
@@ -232,6 +209,47 @@ struct ContentView: View {
                     Button("إغلاق") { showAgent = false }
                 }
             }
+        }
+    }
+
+    private func agentNavigationPreview(_ plan: LocalNavigationAction) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("معاينة التنقل داخل التطبيق")
+                .font(.headline)
+            Text(plan.description)
+            Button("تنفيذ التنقل") { executeLocalNavigation() }
+            Button("إلغاء", role: .cancel) { localNavigationPlan = nil }
+        }
+    }
+
+    private func agentActionPreview(_ plan: AgentPlan) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("معاينة قبل التنفيذ")
+                .font(.headline)
+            Text(agentActionTitle(plan.action))
+            ForEach(plan.payload.keys.filter { $0 != "task_id" && !$0.hasPrefix("_") }.sorted(), id: \.self) { key in
+                if let value = plan.payload[key] {
+                    LabeledContent(key, value: value.display)
+                }
+            }
+            Button("تأكيد وتنفيذ") {
+                Task { await decideAgent(execute: true) }
+            }
+            .disabled(agentBusy)
+            Button("إلغاء الأمر", role: .cancel) {
+                Task { await decideAgent(execute: false) }
+            }
+            .disabled(agentBusy)
+        }
+    }
+
+    private func agentActionTitle(_ action: String) -> String {
+        switch action {
+        case "rename_session": return "تغيير عنوان المحادثة"
+        case "create_task": return "إضافة مهمة إلى لوحة العمل"
+        case "set_task_status": return "تحديث حالة المهمة"
+        case "delete_task": return "حذف مهمة من لوحة العمل"
+        default: return "تغيير تثبيت المحادثة"
         }
     }
 
