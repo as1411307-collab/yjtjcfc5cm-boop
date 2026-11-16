@@ -42,9 +42,9 @@
 ## ما لم يثبت
 
 - لم يُعَد تشغيل اختبارات Swift لعدم توفر toolchain في هذه البيئة؛ التقرير السابق مرفق كدليل تاريخي فقط.
-- لم يُبنَ تطبيق SwiftUI في Xcode، ولم يُختبر iPhone أو Face ID أو الميكروفون أو التوقيع.
+- لم يُختبر iPhone فعلي أو Face ID أو الميكروفون أو التوقيع؛ نجاح Simulator لا يثبت تشغيل الجهاز.
 - لم يُختبر Ollama أو Langflow الحقيقي؛ المسار المذكور يستخدم مزوداً محلياً حتمياً لاختبار التكامل فقط.
-- لم يُشغّل GitHub Actions على المستودع الفعلي، ولم يُرفع أي ملف إلى GitHub.
+- GitHub Actions: نجح على آخر كوميت `fd6add6`؛ Python وSwift Core وChromium وبناء iOS Simulator غير الموقّع كلها خضراء.
 - لا يزال SQLite الأساسي غير مشفر، ولا توجد حدود معدل شبكية أو اختبار اختراق مستقل.
 - لا يوجد Full-duplex أو ربط كامل لـVoiceInteractionCore effects أو durable voice checkpoints.
 
