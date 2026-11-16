@@ -180,7 +180,9 @@ struct ContentView: View {
     private var agentSheet: some View {
         NavigationStack {
             Form {
-                Section {
+                Group {
+                    Text("الوكيل التفاعلي")
+                        .font(.headline)
                     Text("أوامر التنقل: افتح المهام، افتح الإعدادات، افتح المحادثات، افتح الذاكرة، اعرض المهام غير المنجزة. وأوامر تعديل البيانات تتطلب موافقة الخادم.")
                         .font(.footnote)
                     TextField("اكتب أمرًا واضحًا", text: $agentCommand)
@@ -189,8 +191,6 @@ struct ContentView: View {
                         Task { await previewAgentCommand() }
                     }
                     .disabled(agentBusy || sessionID.isEmpty || agentCommand.isEmpty)
-                } header: {
-                    Text("الوكيل التفاعلي")
                 }
                 if let localNavigationPlan {
                     Section("معاينة التنقل داخل التطبيق") {
