@@ -184,7 +184,7 @@ struct ContentView: View {
             Text("أوامر التنقل: افتح المهام، افتح الإعدادات، افتح المحادثات، افتح الذاكرة، اعرض المهام غير المنجزة. وأوامر تعديل البيانات تتطلب موافقة الخادم.")
                 .font(.footnote)
             TextField("اكتب أمرًا واضحًا", text: $agentCommand)
-                .textInputAutocorrectionDisabled()
+                .disableAutocorrection(true)
             Button("معاينة الأمر") {
                 Task { await previewAgentCommand() }
             }
