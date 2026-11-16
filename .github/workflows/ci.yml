@@ -6,7 +6,7 @@ permissions:
   contents: read
 jobs:
   python:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -19,9 +19,19 @@ jobs:
       - run: python -m pytest -q
       - run: python -m pip_audit --local
       - run: python -m playwright install --with-deps chromium
-      - run: RUN_BROWSER_TESTS=1 python -m pytest -q tests/test_web_browser.py
+      - name: Browser session smoke test
+        shell: bash
+        run: |
+          set +e
+          RUN_BROWSER_TESTS=1 python -m pytest -q tests/test_web_browser.py 2>&1 | tee /tmp/browser-test.log
+          status=${PIPESTATUS[0]}
+          if [ "$status" -ne 0 ]; then
+            echo "## Browser test failed" >> "$GITHUB_STEP_SUMMARY"
+            tail -n 200 /tmp/browser-test.log >> "$GITHUB_STEP_SUMMARY"
+            exit "$status"
+          fi
   swift-core:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: swift-actions/setup-swift@v2
@@ -34,4 +44,14 @@ jobs:
       - uses: actions/checkout@v4
       - run: brew install xcodegen
       - run: cd ios && xcodegen generate
-      - run: xcodebuild -project ios/UnifiedAI.xcodeproj -scheme UnifiedAI -sdk iphonesimulator -configuration Debug CODE_SIGNING_ALLOWED=NO build
+      - name: Build iOS simulator
+        shell: bash
+        run: |
+          set +e
+          xcodebuild -project ios/UnifiedAI.xcodeproj -scheme UnifiedAI -sdk iphonesimulator -configuration Debug CODE_SIGNING_ALLOWED=NO build 2>&1 | tee /tmp/unifiedai-xcodebuild.log
+          status=${PIPESTATUS[0]}
+          if [ "$status" -ne 0 ]; then
+            echo "## iOS simulator build failed" >> "$GITHUB_STEP_SUMMARY"
+            tail -n 200 /tmp/unifiedai-xcodebuild.log >> "$GITHUB_STEP_SUMMARY"
+            exit "$status"
+          fi
