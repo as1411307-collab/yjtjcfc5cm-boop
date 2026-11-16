@@ -57,7 +57,14 @@ def test_web_ui_executes_javascript_and_creates_session(tmp_path):
             assert page.evaluate("typeof el") == "function"
             page.fill("#key", key)
             page.click("#start")
-            page.wait_for_function("document.getElementById('session').textContent.includes('الجلسة:')")
+            deadline = time.time() + 10
+            while True:
+                session_text = page.locator("#session").inner_text()
+                if "الجلسة:" in session_text:
+                    break
+                if time.time() >= deadline:
+                    raise AssertionError("لم تُنشأ الجلسة من واجهة المتصفح")
+                time.sleep(0.1)
             assert "لا توجد جلسة" not in page.locator("#session").inner_text()
             assert not any("Executing inline script violates" in error for error in errors)
             assert not any("Applying inline style violates" in error for error in errors)
