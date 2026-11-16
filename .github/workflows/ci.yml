@@ -28,6 +28,7 @@ jobs:
           if [ "$status" -ne 0 ]; then
             echo "## Browser test failed" >> "$GITHUB_STEP_SUMMARY"
             tail -n 200 /tmp/browser-test.log >> "$GITHUB_STEP_SUMMARY"
+            python3 tools/annotate_log.py /tmp/browser-test.log "Browser test failed"
             exit "$status"
           fi
   swift-core:
@@ -48,10 +49,11 @@ jobs:
         shell: bash
         run: |
           set +e
-          xcodebuild -project ios/UnifiedAI.xcodeproj -scheme UnifiedAI -sdk iphonesimulator -configuration Debug CODE_SIGNING_ALLOWED=NO build 2>&1 | tee /tmp/unifiedai-xcodebuild.log
+          xcodebuild -project ios/UnifiedAI.xcodeproj -scheme UnifiedAI -destination 'generic/platform=iOS Simulator' -configuration Debug CODE_SIGNING_ALLOWED=NO build 2>&1 | tee /tmp/unifiedai-xcodebuild.log
           status=${PIPESTATUS[0]}
           if [ "$status" -ne 0 ]; then
             echo "## iOS simulator build failed" >> "$GITHUB_STEP_SUMMARY"
             tail -n 200 /tmp/unifiedai-xcodebuild.log >> "$GITHUB_STEP_SUMMARY"
+            python3 tools/annotate_log.py /tmp/unifiedai-xcodebuild.log "iOS simulator build failed"
             exit "$status"
           fi
