@@ -42,6 +42,7 @@ def zip_contents(data):
 def test_readiness_requires_learning_table_and_audit_remains_compatible(client, app_module):
     assert "learning_events" in app_module.REQUIRED_TABLES
     with app_module.db() as conn:
+        assert conn.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
         tables = {row[0] for row in conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table'")}
     assert app_module.REQUIRED_TABLES <= tables
