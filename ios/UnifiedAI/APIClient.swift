@@ -12,6 +12,10 @@ struct ChatRequest: Encodable {
     let provider: String
     let request_id: String
 }
+struct LearningCursorPage: Decodable {
+    let next_after_id: Int
+    let has_more: Bool
+}
 struct ChatMessage: Identifiable {
     let id = UUID()
     let role: String
@@ -63,8 +67,8 @@ struct APIClient {
         }
     }
 
-    private func request<T: Decodable>(_ path: String, method: String = "GET",
-                                       body: Data? = nil) async throws -> T {
+    private func requestData(_ path: String, method: String = "GET",
+                             body: Data? = nil) async throws -> Data {
         guard let base = URL(string: server),
               base.scheme == "https",
               base.host != nil,
@@ -97,7 +101,30 @@ struct APIClient {
             }
             throw APIError.server(response.statusCode)
         }
+        return data
+    }
+
+    private func request<T: Decodable>(_ path: String, method: String = "GET",
+                                       body: Data? = nil) async throws -> T {
+        let data = try await requestData(path, method: method, body: body)
         return try JSONDecoder().decode(T.self, from: data)
+    }
+
+    /// Manual learning-evidence export; defaults to metadata-only on the server.
+    func learningArchive(afterID: Int, limit: Int = 50,
+                         includeContent: Bool = false) async throws -> Data {
+        guard afterID >= 0, (1...200).contains(limit) else { throw APIError.invalidURL }
+        let path = "/learning/export?after_id=\(afterID)&limit=\(limit)&include_content=\(includeContent)"
+        let data = try await requestData(path)
+        guard data.count <= 5_500_000 else {
+            throw APIError.serverMessage("ملف التصدير أكبر من الحد المسموح")
+        }
+        return data
+    }
+
+    func learningCursor(afterID: Int, limit: Int = 50) async throws -> LearningCursorPage {
+        guard afterID >= 0, (1...200).contains(limit) else { throw APIError.invalidURL }
+        return try await request("/learning/events?after_id=\(afterID)&limit=\(limit)")
     }
 
     func exportSession(_ session: String) async throws -> Data {
