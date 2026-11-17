@@ -23,6 +23,18 @@ def _key(password: str, salt: bytes) -> bytes:
     return Scrypt(salt=salt, length=32, n=2**15, r=8, p=1).derive(password.encode("utf-8"))
 
 
+def _read_bounded(path: Path, limit: int, description: str) -> bytes:
+    """Bound an opened file descriptor; reject pathname-swap and growth races."""
+    with path.open("rb") as stream:
+        size = os.fstat(stream.fileno()).st_size
+        if size > limit:
+            raise ValueError(f"{description} exceeds maximum size")
+        result = stream.read(size + 1)
+        if len(result) != size:
+            raise ValueError(f"{description} changed size during reading")
+        return result
+
+
 def create_backup(database: Path, destination: Path, password: str) -> None:
     if not database.is_file():
         raise FileNotFoundError(database)
@@ -33,9 +45,7 @@ def create_backup(database: Path, destination: Path, password: str) -> None:
         snapshot = Path(folder) / "snapshot.sqlite3"
         with sqlite3.connect(database) as source, sqlite3.connect(snapshot) as target:
             source.backup(target)
-        plaintext = snapshot.read_bytes()
-    if len(plaintext) > MAX_BACKUP_BYTES:
-        raise ValueError("Database exceeds maximum backup size")
+        plaintext = _read_bounded(snapshot, MAX_BACKUP_BYTES, "Database")
     salt, nonce = os.urandom(SALT_BYTES), os.urandom(NONCE_BYTES)
     header = MAGIC + salt + nonce
     encrypted = AESGCM(_key(password, salt)).encrypt(nonce, plaintext, header)
@@ -47,9 +57,7 @@ def create_backup(database: Path, destination: Path, password: str) -> None:
 
 def restore_backup(source: Path, destination: Path, password: str) -> None:
     header_size = len(MAGIC) + SALT_BYTES + NONCE_BYTES
-    if source.stat().st_size > MAX_BACKUP_BYTES + header_size + 16:
-        raise ValueError("Backup exceeds maximum size")
-    payload = source.read_bytes()
+    payload = _read_bounded(source, MAX_BACKUP_BYTES + header_size + 16, "Backup")
     if not payload.startswith(MAGIC) or len(payload) <= header_size + 16:
         raise ValueError("Not a valid Unified AI encrypted backup")
     salt = payload[len(MAGIC):len(MAGIC) + SALT_BYTES]
@@ -68,7 +76,8 @@ def restore_backup(source: Path, destination: Path, password: str) -> None:
             check = db.execute("PRAGMA integrity_check").fetchone()
             if check is None or check[0] != "ok":
                 raise ValueError("SQLite integrity check failed")
-        os.replace(temp_path, destination)
+        # Publish without overwriting a file created by another process since the guard.
+        os.link(temp_path, destination)
         try:
             destination.chmod(0o600)
         except OSError:
