@@ -61,8 +61,8 @@ def test_failed_auth_throttled_and_success_resets(module, monkeypatch):
         assert time.monotonic() - start < 0.5
 
 
-# F3: a locked database yields 503, not a frozen loop or a 500.
-def test_locked_database_returns_503(module, monkeypatch):
+# F3: WAL readers stay available while competing writers fail with 503.
+def test_wal_readers_continue_and_locked_writes_return_503(module, monkeypatch):
     real_db = module.db
 
     @contextlib.contextmanager
@@ -75,13 +75,13 @@ def test_locked_database_returns_503(module, monkeypatch):
     with TestClient(module.app) as client:
         session = new_session(client, module)
         locker = sqlite3.connect(module.DB_PATH, timeout=5)
-        # EXCLUSIVE (not merely IMMEDIATE) blocks readers too in rollback-journal mode.
+        # WAL preserves snapshot reads while an exclusive transaction holds the writer lock.
         locker.execute("BEGIN EXCLUSIVE")
         locker.execute("INSERT INTO audit(event,detail,created_at) VALUES('lock','held',0)")
         try:
             listing = client.get("/sessions", headers=auth(module))
-            assert listing.status_code == 503
-            assert listing.json()["detail"] == "Database busy; retry shortly"
+            assert listing.status_code == 200
+            assert any(item["id"] == session for item in listing.json()["sessions"])
             response = client.post("/chat", headers=auth(module),
                                    json={"session_id": session, "message": "hello"})
             assert response.status_code == 503
