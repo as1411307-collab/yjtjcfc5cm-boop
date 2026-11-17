@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Unified AI Core</title>
+<link rel="stylesheet" href="/static/styles.css">
+<script src="/static/app.js" defer></script>
+</head>
+<body><main>
+<h1>Unified AI Core</h1>
+<p>مساعد محلي تجريبي — لا تضع مفتاح الوصول في صفحة منشورة للعامة.</p>
+<section>
+<label for="key">مفتاح API</label>
+<input id="key" type="password" autocomplete="off" placeholder="أدخل AI_API_KEY">
+<div class="row"><button id="start">إنشاء جلسة</button><button id="load">تحميل المحادثة</button></div>
+<small id="session">لا توجد جلسة</small>
+</section>
+<section>
+<label for="provider">المزوّد</label>
+<select id="provider"><option value="ollama">Ollama</option><option value="langflow">Langflow</option></select>
+<div id="messages" aria-live="polite"></div>
+<label for="prompt">رسالتك</label>
+<textarea id="prompt" rows="3" maxlength="10000" placeholder="اكتب رسالة..."></textarea>
+<button id="send">إرسال</button><small id="status" role="status"></small>
+</section>
+<section>
+<h2>الموافقات</h2>
+<button id="refresh">تحديث الطلبات</button><div id="approvals"></div>
+<small>الموافقة تُسجل القرار فقط؛ لا تنفذ عمليات خارجية.</small>
+</section>
+</main></body>
+</html>
