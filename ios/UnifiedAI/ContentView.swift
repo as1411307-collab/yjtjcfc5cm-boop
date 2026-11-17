@@ -39,6 +39,10 @@ struct ContentView: View {
     @State private var confirmConversationDeletion = false
     @State private var sessionSearch = ""
     @State private var exportedConversationURL: URL?
+    @State private var exportedLearningURL: URL?
+    @State private var learningIncludeContent = false
+    @State private var learningAfterID = 0
+    @State private var learningHasMore = true
     @State private var recentSessions: [ConversationSummary] = []
     @State private var editingSession: ConversationSummary?
     @State private var editedTitle = ""
@@ -503,6 +507,30 @@ struct ContentView: View {
                     messages = []
                 }
             }
+            Section("مسار التعلم الصامت") {
+                Text("تصدير يدوي إلى Mac، بلا إرسال تلقائي أو تشغيل أدوات. يتم حفظ البيانات الوصفية فقط افتراضياً.")
+                    .font(.footnote)
+                if unlocked && SecretStore.load() != nil && !serverURL.isEmpty {
+                    Toggle("تضمين نصوص المحادثات الحساسة", isOn: $learningIncludeContent)
+                    Button(learningHasMore ? "تجهيز صفحة تعلم ZIP" : "إعادة التصدير من البداية") {
+                        if !learningHasMore {
+                            learningAfterID = 0
+                            learningHasMore = true
+                        }
+                        Task { await prepareLearningExport() }
+                    }
+                    if let exportedLearningURL {
+                        ShareLink(item: exportedLearningURL) {
+                            Label("مشاركة ZIP إلى Mac", systemImage: "square.and.arrow.up")
+                        }
+                    }
+                    Text("حتى 50 حدثاً في الملف. شارك الملف قبل تجهيز الصفحة التالية.")
+                        .font(.caption)
+                } else {
+                    Text("احفظ إعدادات خادم HTTPS أولاً.")
+                        .font(.caption)
+                }
+            }
             Section {
                 Text("لا تضع Ollama مباشرة على الإنترنت. استخدم HTTPS عبر بوابة خاصة مع مصادقة.")
                     .font(.footnote)
@@ -909,7 +937,11 @@ struct ContentView: View {
         if let exportedConversationURL {
             try? FileManager.default.removeItem(at: exportedConversationURL)
         }
+        if let exportedLearningURL {
+            try? FileManager.default.removeItem(at: exportedLearningURL)
+        }
         exportedConversationURL = nil
+        exportedLearningURL = nil
     }
 
     private func prepareExport() async {
@@ -924,6 +956,34 @@ struct ContentView: View {
             try data.write(to: file, options: [.atomic, .completeFileProtection])
             exportedConversationURL = file
         } catch {
+            notice = error.localizedDescription
+        }
+    }
+
+    private func prepareLearningExport() async {
+        guard unlocked, scenePhase == .active,
+              SecretStore.load() != nil, !serverURL.isEmpty else { return }
+        let cursor = learningAfterID
+        do {
+            // Read the cursor BEFORE the ZIP: later events may be duplicated,
+            // but can never be skipped if a new event arrives during export.
+            let page = try await client.learningCursor(afterID: cursor, limit: 50)
+            let data = try await client.learningArchive(
+                afterID: cursor, limit: 50, includeContent: learningIncludeContent
+            )
+            guard unlocked, scenePhase == .active, learningAfterID == cursor,
+                  SecretStore.load() != nil else { return }
+            clearExportFile()
+            let file = FileManager.default.temporaryDirectory
+                .appendingPathComponent("learning-\(cursor)-\(UUID().uuidString).zip")
+            try data.write(to: file, options: [.atomic, .completeFileProtection])
+            exportedLearningURL = file
+            learningAfterID = page.next_after_id
+            learningHasMore = page.has_more
+        } catch is CancellationError {
+            return
+        } catch {
+            guard unlocked, scenePhase == .active else { return }
             notice = error.localizedDescription
         }
     }
