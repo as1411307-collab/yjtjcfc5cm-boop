@@ -39,11 +39,35 @@ def test_fault_is_atomic_and_same_request_can_recover(tmp_path, monkeypatch, fau
     original_generate = module.generate
     if fault == 'deadline':
         attempts = []
+        cancelled = []
+        finalized = []
+        deadlines = []
+        original_wait_for = asyncio.wait_for
+
+        async def shortened_generation_deadline(awaitable, timeout):
+            # Keep the real wait_for implementation; shorten only Core's first
+            # generation deadline, leaving slot acquisition and retry unchanged.
+            if timeout == 100.0:
+                deadlines.append(timeout)
+                if len(deadlines) == 1:
+                    timeout = .02
+            return await original_wait_for(awaitable, timeout=timeout)
+
+        monkeypatch.setattr(module.asyncio, 'wait_for', shortened_generation_deadline)
+
         async def deadline_once(prompt, provider):
             attempts.append(True)
             if len(attempts) == 1:
-                # Exercise the actual wait_for timeout branch without waiting 100 seconds.
-                return await asyncio.wait_for(asyncio.sleep(1), timeout=.001)
+                try:
+                    # Bounded fallback makes removal of Core's deadline fail
+                    # promptly instead of hanging the test. No inner timeout.
+                    await asyncio.sleep(.5)
+                    return 'deadline was not enforced'
+                except asyncio.CancelledError:
+                    cancelled.append(True)
+                    raise
+                finally:
+                    finalized.append(True)
             return await original_generate(prompt, provider)
         monkeypatch.setattr(module, 'generate', deadline_once)
 
@@ -54,6 +78,10 @@ def test_fault_is_atomic_and_same_request_can_recover(tmp_path, monkeypatch, fau
                    'request_id': 'fault-recovery-request'}
         failed = client.post('/chat', headers=headers, json=payload)
         assert failed.status_code == (504 if fault == 'deadline' else 502)
+        if fault == 'deadline':
+            assert deadlines == [100.0]
+            assert cancelled == [True]
+            assert finalized == [True]
         with module.db() as conn:
             assert conn.execute('SELECT COUNT(*) FROM messages').fetchone()[0] == 0
             assert conn.execute('SELECT status FROM chat_requests').fetchone()[0] == 'failed'

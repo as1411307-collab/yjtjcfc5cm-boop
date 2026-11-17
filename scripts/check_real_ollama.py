@@ -143,7 +143,7 @@ def run(url, model, output):
         raise
     finally:
         report['finished_at_utc'] = datetime.now(timezone.utc).isoformat()
-        (output / 'report.json').write_text(json.dumps(report, ensure_ascii=False, indent=2) + '\n')
+        (output / 'report.json').write_text(json.dumps(report, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
 
 
 def main():
