@@ -495,10 +495,27 @@ struct ContentView: View {
                     guard SecretStore.load() != nil else {
                         notice = "أدخل مفتاح API"; return
                     }
+                    // A changed credential or endpoint invalidates every in-flight result.
+                    cancelPendingChat()
+                    voiceCoordinator.endSession()
+                    clearExportFile()
+                    sessionID = ""
+                    messages = []
+                    historyCursor = 0
+                    hasMoreHistory = false
+                    retryRequestID = nil
+                    retryFingerprint = ""
+                    learningAfterID = 0
+                    learningHasMore = true
                     apiKey = ""
                     showSettings = false
                 }
                 Button("حذف مفتاح الوصول", role: .destructive) {
+                    cancelPendingChat()
+                    voiceCoordinator.endSession()
+                    clearExportFile()
+                    learningAfterID = 0
+                    learningHasMore = true
                     SecretStore.clear()
                     sessionID = ""
                     insights = nil
@@ -512,6 +529,12 @@ struct ContentView: View {
                     .font(.footnote)
                 if unlocked && SecretStore.load() != nil && !serverURL.isEmpty {
                     Toggle("تضمين نصوص المحادثات الحساسة", isOn: $learningIncludeContent)
+                        .onChange(of: learningIncludeContent) { _, _ in
+                            // The previously prepared ZIP may contain raw transcript text.
+                            clearExportFile()
+                            learningAfterID = 0
+                            learningHasMore = true
+                        }
                     Button(learningHasMore ? "تجهيز صفحة تعلم ZIP" : "إعادة التصدير من البداية") {
                         if !learningHasMore {
                             learningAfterID = 0
