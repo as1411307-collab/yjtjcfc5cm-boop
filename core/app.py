@@ -27,7 +27,7 @@ LANGFLOW_FLOW_ID = os.getenv("LANGFLOW_FLOW_ID", "")
 LANGFLOW_API_KEY = os.getenv("LANGFLOW_API_KEY", "")
 MAX_BODY_BYTES = 128 * 1024
 CHAT_LEASE_SECONDS = 120
-WEB_DIR = Path(__file__).resolve().parent.parent / "web"
+WEB_DIR = Path(__file__).resolve().parent / "web"
 REQUIRED_TABLES = frozenset({"sessions", "messages", "approvals", "memories", "tasks", "agent_plans", "chat_requests", "audit", "learning_events"})
 
 
@@ -246,7 +246,7 @@ class DecisionInput(BaseModel):
 
 @app.get("/")
 def index():
-    return FileResponse(Path(__file__).resolve().parent.parent / "web" / "index.html")
+    return FileResponse(WEB_DIR / "index.html")
 
 
 @app.get("/health")
