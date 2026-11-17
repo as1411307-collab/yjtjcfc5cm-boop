@@ -28,7 +28,8 @@ def _read_bounded(path: Path, limit: int, description: str) -> bytes:
     with path.open("rb") as stream:
         size = os.fstat(stream.fileno()).st_size
         if size > limit:
-            raise ValueError(f"{description} exceeds maximum size")
+            suffix = "maximum backup size" if description == "Database" else "maximum size"
+            raise ValueError(f"{description} exceeds {suffix}")
         result = stream.read(size + 1)
         if len(result) != size:
             raise ValueError(f"{description} changed size during reading")
