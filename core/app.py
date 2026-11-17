@@ -47,6 +47,11 @@ def db():
 def initialize():
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     with db() as conn:
+        # WAL permits bounded readers while the single writer commits turns.
+        # Only supported on a local filesystem; fail instead of silently downgrading.
+        journal = conn.execute("PRAGMA journal_mode=WAL").fetchone()[0]
+        if journal.lower() != "wal":
+            raise RuntimeError("SQLite WAL mode unavailable on this storage")
         conn.executescript("""
         CREATE TABLE IF NOT EXISTS sessions (
             id TEXT PRIMARY KEY, created_at INTEGER NOT NULL
