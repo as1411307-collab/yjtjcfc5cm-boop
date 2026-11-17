@@ -29,18 +29,10 @@ def test_chunked_and_declared_body_limits_do_not_bypass(module):
         assert created.status_code == 200
 
 
-def test_static_web_assets_work_with_strict_csp(module):
+def test_server_does_not_publish_a_browser_ui(module):
     with TestClient(module.app) as client:
-        page = client.get("/")
-        assert page.status_code == 200
-        assert '<script src="/static/app.js" defer></script>' in page.text
-        assert '<link rel="stylesheet" href="/static/styles.css">' in page.text
-        assert "<style>" not in page.text
-        assert "'unsafe-inline'" not in page.headers["content-security-policy"]
-        assert client.get("/static/styles.css").status_code == 200
-        script = client.get("/static/app.js")
-        assert script.status_code == 200
-        assert "request_id" in script.text
+        assert client.get("/").status_code == 404
+        assert client.get("/static/app.js").status_code == 404
 
 
 def test_chat_idempotency_replays_saved_answer_once(module):
