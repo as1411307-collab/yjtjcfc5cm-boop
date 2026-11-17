@@ -14,6 +14,22 @@ struct ChatRequest: Encodable {
     let request_id: String
     let include_context: Bool
 }
+enum LearningCategory: String, CaseIterable {
+    case all, conversation, runtime, verification, source, tool, error
+
+    var label: String {
+        switch self {
+        case .all: return "كل الأحداث"
+        case .conversation: return "المحادثات"
+        case .runtime: return "التشغيل"
+        case .verification: return "التحقّق"
+        case .source: return "المصادر"
+        case .tool: return "الأدوات"
+        case .error: return "الأخطاء"
+        }
+    }
+}
+
 struct LearningCursorPage {
     let next_after_id: Int
     let has_more: Bool
@@ -100,6 +116,7 @@ struct APIClient {
         defer { session.finishTasksAndInvalidate() }
         let (data, response) = try await session.data(for: request)
         guard let response = response as? HTTPURLResponse else { throw APIError.invalidResponse }
+        if response.statusCode == 413 { throw APIError.server(413) }
         if response.statusCode == 401 { throw APIError.unauthorized }
         guard (200...299).contains(response.statusCode) else {
             if let error = try? JSONDecoder().decode(APIErrorDetail.self, from: data),
@@ -119,10 +136,17 @@ struct APIClient {
 
     /// Manual learning-evidence export; defaults to metadata-only on the server.
     func learningArchive(afterID: Int, limit: Int = 50,
-                         includeContent: Bool = false) async throws -> (Data, LearningCursorPage) {
+                         includeContent: Bool = false, category: LearningCategory = .all) async throws -> (Data, LearningCursorPage) {
         guard afterID >= 0, (1...200).contains(limit) else { throw APIError.invalidURL }
-        let path = "/learning/export?after_id=\(afterID)&limit=\(limit)&include_content=\(includeContent)"
-        let (data, response) = try await requestData(path)
+        let filter = category == .all ? "" : "&category=\(category.rawValue)"
+        let path = "/learning/export?after_id=\(afterID)&limit=\(limit)&include_content=\(includeContent)\(filter)"
+        let data: Data
+        let response: HTTPURLResponse
+        do {
+            (data, response) = try await requestData(path)
+        } catch APIError.server(413) where limit > 1 {
+            return try await learningArchive(afterID: afterID, limit: limit / 2, includeContent: includeContent, category: category)
+        }
         guard data.count <= 5_500_000 else {
             throw APIError.serverMessage("ملف التصدير أكبر من الحد المسموح")
         }

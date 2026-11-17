@@ -7,17 +7,19 @@ enum SecretStore {
     static let service = "UnifiedAI"
 
     static func save(_ value: String) -> Bool {
-        let bytes = Data(value.utf8)
-        SecItemDelete([kSecClass: kSecClassGenericPassword, kSecAttrService: service,
-                       kSecAttrAccount: account] as CFDictionary)
-        let query: [CFString: Any] = [
-            kSecClass: kSecClassGenericPassword,
-            kSecAttrService: service,
-            kSecAttrAccount: account,
-            kSecValueData: bytes,
-            kSecAttrAccessible: kSecAttrAccessibleWhenUnlockedThisDeviceOnly
-        ]
-        return SecItemAdd(query as CFDictionary, nil) == errSecSuccess
+        let match: [CFString: Any] = [kSecClass: kSecClassGenericPassword,
+                                      kSecAttrService: service, kSecAttrAccount: account]
+        let attributes: [CFString: Any] = [kSecValueData: Data(value.utf8),
+                                           kSecAttrAccessible: kSecAttrAccessibleWhenUnlockedThisDeviceOnly]
+        let result = SecItemUpdate(match as CFDictionary, attributes as CFDictionary)
+        if result == errSecSuccess { return true }
+        guard result == errSecItemNotFound else { return false }
+        let newItem = match.merging(attributes) { _, new in new }
+        let added = SecItemAdd(newItem as CFDictionary, nil)
+        if added == errSecDuplicateItem {
+            return SecItemUpdate(match as CFDictionary, attributes as CFDictionary) == errSecSuccess
+        }
+        return added == errSecSuccess
     }
 
     static func load() -> String? {
@@ -34,9 +36,10 @@ enum SecretStore {
         return String(data: data, encoding: .utf8)
     }
 
-    static func clear() {
-        SecItemDelete([kSecClass: kSecClassGenericPassword, kSecAttrService: service,
+    static func clear() -> Bool {
+        let result = SecItemDelete([kSecClass: kSecClassGenericPassword, kSecAttrService: service,
                        kSecAttrAccount: account] as CFDictionary)
+        return result == errSecSuccess || result == errSecItemNotFound
     }
 }
 

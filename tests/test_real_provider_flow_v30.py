@@ -30,6 +30,7 @@ class OllamaStub(BaseHTTPRequestHandler):
         assert self.path == "/api/chat"
         assert payload["messages"][0]["role"] == "system"
         assert payload["messages"][1]["role"] == "user"
+        assert 1 <= payload["options"]["num_predict"] <= 8192
         type(self).calls += 1
         body = json.dumps({"message": {"role": "assistant", "content": "رد عبر مسار HTTP الحقيقي"}}).encode()
         self.send_response(200)

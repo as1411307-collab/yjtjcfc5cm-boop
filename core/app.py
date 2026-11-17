@@ -14,7 +14,7 @@ from typing import Literal
 import httpx
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import FileResponse, JSONResponse, Response
-from core.learning import initialize as initialize_learning, append_event as append_learning_event, digest as learning_digest, read_page as read_learning_page, build_zip as build_learning_zip
+from core.learning import LearningCategory, initialize as initialize_learning, append_event as append_learning_event, digest as learning_digest, read_page as read_learning_page, build_zip as build_learning_zip
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -22,6 +22,9 @@ DB_PATH = Path(os.getenv("DB_PATH", "./data/core.sqlite3"))
 API_KEY = os.getenv("AI_API_KEY", "")
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://127.0.0.1:11434").rstrip("/")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2")
+OLLAMA_MAX_TOKENS = int(os.getenv("OLLAMA_MAX_TOKENS", "1024"))
+if not 1 <= OLLAMA_MAX_TOKENS <= 8192:
+    raise ValueError("OLLAMA_MAX_TOKENS must be between 1 and 8192")
 LANGFLOW_URL = os.getenv("LANGFLOW_URL", "").rstrip("/")
 LANGFLOW_FLOW_ID = os.getenv("LANGFLOW_FLOW_ID", "")
 LANGFLOW_API_KEY = os.getenv("LANGFLOW_API_KEY", "")
@@ -557,7 +560,8 @@ async def generate(prompt: str, provider: str):
                 response = await client.post(
                     f"{OLLAMA_URL}/api/chat",
                     json={"model": OLLAMA_MODEL, "stream": False,
-                          "messages": provider_messages(prompt)})
+                          "messages": provider_messages(prompt),
+                          "options": {"num_predict": OLLAMA_MAX_TOKENS}})
                 response.raise_for_status()
                 answer = response.json()["message"]["content"]
             else:
@@ -727,7 +731,8 @@ async def chat(body: ChatInput):
     memory_context = ""
     if selected:
         memory_context = MEMORY_HEADER + "\n".join(f"- {item}" for item in selected) + MEMORY_FOOTER
-    prompt = build_chat_prompt(body.message, history, memory_context)
+    # Empty context needs no framing. Give the provider the actual current question.
+    prompt = build_chat_prompt(body.message, history, memory_context) if history or memory_context else body.message
     try:
         try:
             await asyncio.wait_for(_model_slots.acquire(), timeout=3.0)
@@ -874,21 +879,23 @@ def audit_log(after_id: int | None = Query(default=None, ge=0),
 
 @app.get("/learning/events", dependencies=[Depends(authorize)])
 def learning_events(after_id: int = Query(default=0, ge=0),
-                    limit: int = Query(default=100, ge=1, le=200)):
+                    limit: int = Query(default=100, ge=1, le=200),
+                    category: LearningCategory | None = None):
     """Read-only metadata; transcript content is never sent by this endpoint."""
     with db() as conn:
-        return read_learning_page(conn, after_id=after_id, limit=limit)
+        return read_learning_page(conn, after_id=after_id, limit=limit, category=category)
 
 
 @app.get("/learning/export", dependencies=[Depends(authorize)])
 def learning_export(after_id: int = Query(default=0, ge=0),
                     limit: int = Query(default=200, ge=1, le=200),
-                    include_content: bool = False):
+                    include_content: bool = False,
+                    category: LearningCategory | None = None):
     """Explicit bounded ZIP export for manual transfer; no background upload."""
     with db() as conn:
         try:
             payload, next_id, has_more = build_learning_zip(
-                conn, after_id=after_id, limit=limit, include_content=include_content
+                conn, after_id=after_id, limit=limit, include_content=include_content, category=category
             )
         except ValueError as exc:
             raise HTTPException(status_code=413, detail=str(exc)) from exc

@@ -118,6 +118,7 @@ final class VoiceSessionCoordinator: ObservableObject {
 
     private var authorizationTask: Task<Void, Never>?
     private var activeTurnID: UUID?
+    private var activeTurnContext: VoiceSubmitContext?
     private var submissionTask: Task<Void, Never>?
     private var pathMonitor: NWPathMonitor?
     private var observers: [NSObjectProtocol] = []
@@ -245,7 +246,7 @@ final class VoiceSessionCoordinator: ObservableObject {
             persistUtteranceCheckpoint(id: id, text: text)
         case .checkpointDraft(let id, let text):
             do {
-                guard let context = contextProvider?() else { return }
+                guard let context = activeTurnContext else { return }
                 try store.persistDraft(id: id, text: text, context: context)
             } catch {
                 alertMessage = "تعذر حفظ مسودة الكلام محلياً."
@@ -275,6 +276,7 @@ final class VoiceSessionCoordinator: ObservableObject {
     private func beginMicrophoneCapture() {
         guard policy.state.active, let token = policy.state.sessionID else { return }
         let turnID = UUID()
+        activeTurnContext = contextProvider?()
         activeTurnID = turnID
         // Authorization has completed. Engine start and its acknowledgement run on
         // MainActor without a suspension between the lifecycle check and capture.
@@ -289,7 +291,7 @@ final class VoiceSessionCoordinator: ObservableObject {
     private func persistUtteranceCheckpoint(id: UUID, text: String) {
         // Persist first (fail closed), then confirm back to the reducer.
         do {
-            guard let context = contextProvider?() else { throw APIError.invalidResponse }
+            guard let context = activeTurnContext else { throw APIError.invalidResponse }
             try store.persistUtterance(id: id, text: text, context: context)
             checkpointFailurePending = false
         } catch {
@@ -317,12 +319,11 @@ final class VoiceSessionCoordinator: ObservableObject {
             }
             return
         }
-        guard let contextProvider, let clientProvider else {
+        guard let context = activeTurnContext, let client = clientProvider?(),
+              context.account == client.accountScope else {
             alertMessage = "إعداد جلسة الصوت غير مكتمل."
             return
         }
-        let context = contextProvider()
-        let client = clientProvider()
         submissionTask?.cancel()
         submissionTask = Task { [weak self] in
             guard let self else { return }

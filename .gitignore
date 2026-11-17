@@ -45,3 +45,7 @@ ios/UnifiedAI.xcodeproj/
 *.sqlite-*
 *.sqlite3-*
 *.db-*
+
+# Local Python distributions
+/build/
+/dist/

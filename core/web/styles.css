@@ -11,3 +11,4 @@ button:disabled{opacity:.5;cursor:wait}.row{display:flex;gap:8px;flex-wrap:wrap}
 .msg.user{background:#173e62}small{color:#b5c6e2}label{display:block;margin:8px 0}
 #status{display:inline-block;margin-inline-start:10px}
 @media(max-width:520px){main{padding:12px}section{padding:14px}}
+input[type="checkbox"]{width:auto;margin-inline-end:.5em;vertical-align:middle}

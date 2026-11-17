@@ -122,3 +122,32 @@ def test_cli_wrong_password_exits_without_traceback(tmp_path, monkeypatch, capsy
     assert exc.value.code == 1
     assert "wrong password" in capsys.readouterr().err
     assert not database.exists()
+
+def test_streaming_backup_keeps_legacy_format_and_rejects_corruption(tmp_path, monkeypatch):
+    from cryptography.exceptions import InvalidTag
+    monkeypatch.setattr(backup, "CHUNK_BYTES", 211)
+    database = tmp_path / "original.db"
+    make_db(database)
+    source = tmp_path / "roundtrip.uai"
+    create_backup(database, source, PASSWORD)
+    envelope = source.read_bytes()
+    split = len(backup.MAGIC) + backup.SALT_BYTES
+    header_end = split + backup.NONCE_BYTES
+    key = backup._key(PASSWORD, envelope[len(backup.MAGIC):split])
+    legacy = AESGCM(key)
+    plain = legacy.decrypt(envelope[split:header_end], envelope[header_end:], envelope[:header_end])
+    assert plain.startswith(b"SQLite format 3\x00")
+    # An archive emitted by the old one-shot writer restores with the streamed reader.
+    nonce = os.urandom(backup.NONCE_BYTES)
+    header = envelope[:split] + nonce
+    source.write_bytes(header + legacy.encrypt(nonce, plain, header))
+    restored = tmp_path / "restored.db"
+    restore_backup(source, restored, PASSWORD)
+    assert table_rows(restored) == table_rows(database)
+    damaged = bytearray(source.read_bytes())
+    damaged[-1] ^= 1
+    source.write_bytes(damaged)
+    with pytest.raises(InvalidTag):
+        restore_backup(source, tmp_path / "unpublished.db", PASSWORD)
+    assert not (tmp_path / "unpublished.db").exists()
+    assert not list(tmp_path.glob(".restore-*"))

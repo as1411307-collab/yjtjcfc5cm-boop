@@ -68,6 +68,17 @@ def test_web_ui_executes_javascript_and_creates_session(tmp_path):
             assert "لا توجد جلسة" not in page.locator("#session").inner_text()
             assert not any("Executing inline script violates" in error for error in errors)
             assert not any("Applying inline style violates" in error for error in errors)
+            page.uncheck("#context")
+            def reply(route):
+                assert route.request.post_data_json["include_context"] is False
+                route.fulfill(json={"answer": "رد تجريبي"})
+            page.route("**/chat", reply)
+            page.fill("#prompt", "اختبار")
+            page.click("#send")
+            page.get_by_text("المساعد: رد تجريبي").wait_for()
+            page.fill("#key", "different-test-account")
+            assert page.locator("#messages").inner_text() == ""
+            assert page.locator("#session").inner_text() == "لا توجد جلسة"
             browser.close()
     finally:
         process.terminate()

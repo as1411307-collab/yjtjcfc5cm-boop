@@ -217,14 +217,6 @@ def test_backup_restore_refuses_oversized_file(tmp_path, monkeypatch):
     assert not (tmp_path / "recovered.sqlite3").exists()
 
 
-def test_backup_reads_are_bounded_to_fstat_size(tmp_path):
-    from core.backup import _read_bounded
-    source = tmp_path / "payload"
-    source.write_bytes(b"abcd")
-    assert _read_bounded(source, 4, "File") == b"abcd"
-    with pytest.raises(ValueError, match="exceeds maximum"):
-        _read_bounded(source, 3, "File")
-
 def test_metadata_never_reads_the_messages_table(client, app_module):
     import core.learning as learning
     with app_module.db() as conn:
@@ -244,8 +236,7 @@ def test_context_free_request_skips_stored_input_and_keeps_retry_semantics(clien
     def unexpected_memory_read():
         pytest.fail("Context-free request read stored memories")
     async def generate(prompt, provider):
-        assert "previous conversation" not in prompt
-        assert "current question" in prompt
+        assert prompt == "current question"
         return "answer"
     monkeypatch.setattr(app_module, "_chat_memory_notes", unexpected_memory_read)
     monkeypatch.setattr(app_module, "generate", generate)
@@ -270,3 +261,48 @@ def test_latest_history_page_remains_stable_while_new_messages_arrive(client, ap
     assert [row["content"] for row in older["messages"]] == ["one", "two"]
     assert not older["has_more"]
     assert client.get(url, params={"before_id": 2, "after_id": 1}).status_code == 422
+
+def test_filtered_learning_export_has_independent_cursor_and_verifiable_bytes(client, app_module):
+    import hashlib
+    import core.learning as learning
+    with app_module.db() as conn:
+        ids = [learning.append_event(conn, category=category, event="test_event")
+               for category in ("source", "error", "source", "tool")]
+    result = client.get("/learning/events", params={"category": "source", "limit": 1}).json()
+    assert [event["id"] for event in result["events"]] == [ids[0]]
+    assert result["has_more"]
+    response = client.get("/learning/export", params={"after_id": ids[0], "category": "source"})
+    with zipfile.ZipFile(io.BytesIO(response.content)) as archive:
+        manifest = json.loads(archive.read("manifest.json"))
+        raw = archive.read("events.jsonl")
+    assert manifest["events_sha256"] == hashlib.sha256(raw).hexdigest()
+    assert manifest["category"] == "source"
+    assert manifest["record_count"] == 1
+    assert manifest["next_after_id"] == ids[2]
+    assert not manifest["has_more"]
+    assert json.loads(raw)["id"] == ids[2]
+    assert client.get("/learning/export", params={"category": "unknown"}).status_code == 422
+    assert client.get("/learning/events", params={"category": "unknown"}).status_code == 422
+
+
+def test_offline_mac_verifier_accepts_legacy_and_detects_a_changed_event(client, tmp_path, app_module):
+    import core.learning as learning
+    from scripts.verify_learning_export import verify
+    with app_module.db() as conn:
+        learning.append_event(conn, category="tool", event="fixture")
+    file = tmp_path / "export.zip"
+    file.write_bytes(client.get("/learning/export").content)
+    assert verify(file)["checksum"] == "matched"
+    with zipfile.ZipFile(file) as archive:
+        manifest = json.loads(archive.read("manifest.json"))
+        raw = archive.read("events.jsonl")
+    def repack(events):
+        with zipfile.ZipFile(file, "w") as archive:
+            archive.writestr("manifest.json", json.dumps(manifest))
+            archive.writestr("events.jsonl", events)
+    repack(raw.replace(b"fixture", b"changed"))
+    with pytest.raises(ValueError, match="checksum"):
+        verify(file)
+    del manifest["events_sha256"]
+    repack(raw)
+    assert verify(file)["checksum"].startswith("absent")

@@ -1,5 +1,17 @@
 import SwiftUI
 import UIKit
+import CoreTransferable
+import UniformTypeIdentifiers
+
+private struct LearningArchive: Transferable {
+    let data: Data
+    let filename: String
+
+    static var transferRepresentation: some TransferRepresentation {
+        DataRepresentation(exportedContentType: .zip) { archive in archive.data }
+            .suggestedFileName { archive in archive.filename }
+    }
+}
 
 struct ContentView: View {
     @AppStorage("serverURL") private var serverURL = ""
@@ -43,12 +55,13 @@ struct ContentView: View {
     @State private var confirmConversationDeletion = false
     @State private var sessionSearch = ""
     @State private var exportedConversationURL: URL?
-    @State private var exportedLearningURL: URL?
+    @State private var exportedLearningArchive: LearningArchive?
+    @State private var preparedLearningScope: String?
     @State private var learningIncludeContent = false
     @State private var exportGeneration = UUID()
     @State private var preparedLearningPage: LearningCursorPage?
     @State private var learningAfterID = 0
-    @State private var learningHasMore = true
+    @State private var learningCategory: LearningCategory = .all
     @State private var recentSessions: [ConversationSummary] = []
     @State private var editingSession: ConversationSummary?
     @State private var editedTitle = ""
@@ -124,7 +137,7 @@ struct ContentView: View {
                 if phase != .active {
                     cancelPendingChat()
                     voiceCoordinator.appBecameInactive()
-                    clearExportFile()
+                    clearExportFile(keepLearningReceipt: true)
                     showAgent = false
                     showTaskBoard = false
                     showMemories = false
@@ -308,6 +321,8 @@ struct ContentView: View {
 
     private func previewAgentCommand() async {
         guard unlocked, scenePhase == .active, !sessionID.isEmpty else { return }
+        let source = client
+        let selected = sessionID
         agentBusy = true
         defer { agentBusy = false }
         agentPlan = nil
@@ -317,7 +332,9 @@ struct ContentView: View {
             return
         }
         do {
-            agentPlan = try await client.planAgentAction(session: sessionID, command: agentCommand)
+            let plan = try await source.planAgentAction(session: selected, command: agentCommand)
+            guard unlocked, scenePhase == .active, client.accountScope == source.accountScope, sessionID == selected else { return }
+            agentPlan = plan
         } catch {
             notice = error.localizedDescription
         }
@@ -518,11 +535,11 @@ struct ContentView: View {
                     guard SecretStore.load() != nil else {
                         notice = "أدخل مفتاح API"; return
                     }
-                    serverURL = endpoint
                     // A changed credential or endpoint invalidates every in-flight result.
                     cancelPendingChat()
                     voiceCoordinator.endSession()
                     clearExportFile()
+                    serverURL = endpoint
                     sessionID = ""
                     messages = []
                     historyCursor = 0
@@ -531,7 +548,6 @@ struct ContentView: View {
                     retryFingerprint = ""
                     resetAccountView()
                     learningAfterID = 0
-                    learningHasMore = true
                     apiKey = ""
                     showSettings = false
                     voiceCoordinator.refreshPendingCheckpoints()
@@ -542,8 +558,9 @@ struct ContentView: View {
                     clearExportFile()
                     resetAccountView()
                     learningAfterID = 0
-                    learningHasMore = true
-                    SecretStore.clear()
+                    guard SecretStore.clear() else {
+                        notice = "تعذّر حذف المفتاح من Keychain"; return
+                    }
                     apiKey = ""
                     voiceCoordinator.refreshPendingCheckpoints()
                     clearExportFile()
@@ -565,34 +582,40 @@ struct ContentView: View {
                 Text("تصدير يدوي إلى Mac، بلا إرسال تلقائي أو تشغيل أدوات. يتم حفظ البيانات الوصفية فقط افتراضياً.")
                     .font(.footnote)
                 if unlocked && SecretStore.load() != nil && !serverURL.isEmpty {
+                    Picker("فئة الأحداث", selection: $learningCategory) {
+                        ForEach(LearningCategory.allCases, id: \.self) { category in
+                            Text(category.label).tag(category)
+                        }
+                    }
                     Toggle("تضمين نصوص المحادثات الحساسة", isOn: $learningIncludeContent)
-                        .onChange(of: learningIncludeContent) { _, _ in
-                            // The previously prepared ZIP may contain raw transcript text.
-                            clearExportFile()
-                            learningAfterID = 0
-                            learningHasMore = true
-                        }
-                    Button(learningHasMore ? "تجهيز صفحة تعلم ZIP" : "إعادة التصدير من البداية") {
-                        if !learningHasMore {
-                            learningAfterID = 0
-                            learningHasMore = true
-                        }
+                    Button("تجهيز أحداث التعلّم التالية") {
                         Task { await prepareLearningExport() }
                     }
-                    .disabled(exportedLearningURL != nil)
-                    if let exportedLearningURL {
-                        ShareLink(item: exportedLearningURL) {
+                    .disabled(exportedLearningArchive != nil)
+                    if learningAfterID > 0 {
+                        Button("البدء من أول حدث في هذه الفئة") {
+                            clearExportFile()
+                            UserDefaults.standard.removeObject(forKey: learningProgressKey)
+                            learningAfterID = 0
+                        }
+                    }
+                    if let archive = exportedLearningArchive {
+                        ShareLink(item: archive, preview: SharePreview(archive.filename)) {
                             Label("مشاركة ZIP إلى Mac", systemImage: "square.and.arrow.up")
                         }
+                    }
+                    if let page = preparedLearningPage, preparedLearningScope == learningProgressKey {
                         Button("تم نقل الملف إلى Mac") {
-                            guard let page = preparedLearningPage else { return }
                             learningAfterID = page.next_after_id
-                            learningHasMore = page.has_more
+                            UserDefaults.standard.set(page.next_after_id, forKey: learningProgressKey)
                             clearExportFile()
                         }
                     }
-                    Text("حتى 50 حدثاً في الملف. شارك الملف قبل تجهيز الصفحة التالية.")
+                    Text("يتذكّر التطبيق آخر صفحة أكّدت نقلها لكل خادم وفئة وإعداد محتوى. حتى 50 حدثاً في الملف.")
                         .font(.caption)
+                        .onAppear { restoreLearningProgress() }
+                        .onChange(of: learningCategory) { _, _ in restoreLearningProgress() }
+                        .onChange(of: learningIncludeContent) { _, _ in restoreLearningProgress() }
                 } else {
                     Text("احفظ إعدادات خادم HTTPS أولاً.")
                         .font(.caption)
@@ -877,7 +900,7 @@ struct ContentView: View {
                         .font(.footnote.bold())
                     ForEach(voiceCoordinator.pendingCheckpoints) { checkpoint in
                         HStack {
-                            Text(checkpoint.text)
+                            Text(checkpoint.context == nil ? "تسجيل سابق بلا بيانات خادم" : checkpoint.text)
                                 .font(.footnote)
                                 .lineLimit(2)
                             Spacer()
@@ -1059,17 +1082,17 @@ struct ContentView: View {
         serverStatus = ""
     }
 
-    private func clearExportFile() {
+    private func clearExportFile(keepLearningReceipt: Bool = false) {
         exportGeneration = UUID()
-        preparedLearningPage = nil
+        if !keepLearningReceipt {
+            preparedLearningPage = nil
+            preparedLearningScope = nil
+        }
         if let exportedConversationURL {
             try? FileManager.default.removeItem(at: exportedConversationURL)
         }
-        if let exportedLearningURL {
-            try? FileManager.default.removeItem(at: exportedLearningURL)
-        }
         exportedConversationURL = nil
-        exportedLearningURL = nil
+        exportedLearningArchive = nil
     }
 
     private func prepareExport() async {
@@ -1089,6 +1112,15 @@ struct ContentView: View {
         }
     }
 
+    private var learningProgressKey: String {
+        "learning.after.v1.\(client.accountScope).\(learningCategory.rawValue).\(learningIncludeContent)"
+    }
+
+    private func restoreLearningProgress() {
+        clearExportFile(keepLearningReceipt: preparedLearningScope == learningProgressKey)
+        learningAfterID = UserDefaults.standard.integer(forKey: learningProgressKey)
+    }
+
     private func prepareLearningExport() async {
         guard unlocked, scenePhase == .active,
               SecretStore.load() != nil, !serverURL.isEmpty else { return }
@@ -1096,16 +1128,17 @@ struct ContentView: View {
         let generation = UUID()
         exportGeneration = generation
         let source = client
+        let category = learningCategory
         let consent = learningIncludeContent
         do {
-            let (data, page) = try await source.learningArchive(afterID: cursor, limit: 50, includeContent: consent)
+            let (data, page) = try await source.learningArchive(afterID: cursor, limit: 50, includeContent: consent, category: category)
             guard exportGeneration == generation, unlocked, scenePhase == .active,
-                  consent == learningIncludeContent, source.accountScope == client.accountScope else { return }
+                  category == learningCategory, consent == learningIncludeContent, source.accountScope == client.accountScope else { return }
             clearExportFile()
-            let file = FileManager.default.temporaryDirectory
-                .appendingPathComponent("learning-\(cursor)-\(UUID().uuidString).zip")
-            try data.write(to: file, options: [.atomic, .completeFileProtection])
-            exportedLearningURL = file
+            guard page.next_after_id > cursor else { notice = "ما فيه أحداث جديدة في هذه الفئة"; return }
+            let name = "learning-\(category.rawValue)-\(cursor)-\(page.next_after_id).zip"
+            exportedLearningArchive = LearningArchive(data: data, filename: name)
+            preparedLearningScope = learningProgressKey
             preparedLearningPage = page
         } catch is CancellationError {
             return

@@ -14,8 +14,10 @@ import sqlite3
 import time
 import zipfile
 from datetime import datetime, timezone
+from typing import Literal, get_args
 
-CATEGORIES = frozenset({"conversation", "runtime", "verification", "source", "tool", "error"})
+LearningCategory = Literal["conversation", "runtime", "verification", "source", "tool", "error"]
+CATEGORIES = frozenset(get_args(LearningCategory))
 STATUSES = frozenset({"observed", "success", "failure", "unverified"})
 MAX_EXPORT_BYTES = 5_000_000
 SCHEMA_VERSION = 1
@@ -40,6 +42,7 @@ def initialize(conn: sqlite3.Connection) -> None:
             created_at INTEGER NOT NULL
         );
         CREATE INDEX IF NOT EXISTS idx_learning_events_created ON learning_events(created_at,id);
+        CREATE INDEX IF NOT EXISTS idx_learning_events_category ON learning_events(category,id);
         CREATE INDEX IF NOT EXISTS idx_learning_events_session ON learning_events(session_id,id);
     """)
 
@@ -83,12 +86,15 @@ def append_event(
     return cursor.lastrowid
 
 
-def read_page(conn: sqlite3.Connection, *, after_id: int, limit: int) -> dict:
+def read_page(conn: sqlite3.Connection, *, after_id: int, limit: int, category: LearningCategory | None = None) -> dict:
     if after_id < 0 or not 1 <= limit <= 200:
         raise ValueError("Invalid learning event page")
+    if category is not None and category not in CATEGORIES:
+        raise ValueError("Unknown learning category")
+    condition = " AND category=?" if category is not None else ""
+    params = (after_id, category, limit + 1) if category is not None else (after_id, limit + 1)
     rows = conn.execute(
-        "SELECT * FROM learning_events WHERE id>? ORDER BY id LIMIT ?",
-        (after_id, limit + 1),
+        f"SELECT * FROM learning_events WHERE id>?{condition} ORDER BY id LIMIT ?", params,
     ).fetchall()
     events = []
     for row in rows[:limit]:
@@ -121,12 +127,14 @@ def _transcript(conn, event, field, remaining):
     return row["text"]
 
 
-def build_zip(conn: sqlite3.Connection, *, after_id: int, limit: int, include_content: bool):
+def build_zip(conn: sqlite3.Connection, *, after_id: int, limit: int, include_content: bool,
+              category: LearningCategory | None = None):
     if not conn.in_transaction:
         conn.execute("BEGIN")
-    page = read_page(conn, after_id=after_id, limit=limit)
+    page = read_page(conn, after_id=after_id, limit=limit, category=category)
     output = io.BytesIO()
     remaining = MAX_EXPORT_BYTES
+    checksum = hashlib.sha256()
     with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as archive:
         with archive.open("events.jsonl", "w") as lines:
             for event in page["events"]:
@@ -141,8 +149,9 @@ def build_zip(conn: sqlite3.Connection, *, after_id: int, limit: int, include_co
                 remaining -= len(line) + 1
                 if remaining < 0:
                     raise ValueError("Learning export exceeds the byte limit; use smaller pages")
+                line += b"\n"
                 lines.write(line)
-                lines.write(b"\n")
+                checksum.update(line)
                 event.pop("input_text", None)
                 event.pop("output_text", None)
         manifest = {
@@ -152,6 +161,8 @@ def build_zip(conn: sqlite3.Connection, *, after_id: int, limit: int, include_co
             "next_after_id": page["next_after_id"],
             "has_more": page["has_more"],
             "record_count": len(page["events"]),
+            "category": category,
+            "events_sha256": checksum.hexdigest(),
             "include_content": include_content,
             "content_policy": "Conversation text is resolved by reference; deleting a session removes its text.",
             "thinking_policy": "Only observable inputs, outputs, and metadata; no hidden model reasoning.",
