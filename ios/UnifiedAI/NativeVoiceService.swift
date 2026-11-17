@@ -16,8 +16,11 @@ final class NativeVoiceService: NSObject, ObservableObject, AVSpeechSynthesizerD
     private var generation = UUID()
     private var finalDelivered = false
     private var awaitingFinal = false
+    private var recognizerFinished = false
+    private var tapInstalled = false
     private var finalizationTask: Task<Void, Never>?
     var onFinalTranscript: ((String) -> Void)?
+    var onPartialTranscript: ((String) -> Void)?
     var onRecordingStopped: (() -> Void)?
 
     override init() {
@@ -39,13 +42,14 @@ final class NativeVoiceService: NSObject, ObservableObject, AVSpeechSynthesizerD
         return true
     }
 
-    func start() async -> Bool {
+    func start() -> Bool {
         guard !recording else { return false }
-        guard await authorize() else { return false }
+        guard !awaitingFinal else { return false }
         stopSpeech()
         errorMessage = nil
         transcript = ""
         finalDelivered = false
+        recognizerFinished = false
         awaitingFinal = false
         finalizationTask?.cancel()
         let token = UUID()
@@ -67,6 +71,7 @@ final class NativeVoiceService: NSObject, ObservableObject, AVSpeechSynthesizerD
             input.installTap(onBus: 0, bufferSize: 1024, format: format) { buffer, _ in
                 request.append(buffer)
             }
+            tapInstalled = true
             audioEngine.prepare()
             try audioEngine.start()
             recording = true
@@ -75,11 +80,18 @@ final class NativeVoiceService: NSObject, ObservableObject, AVSpeechSynthesizerD
                     guard let self, self.generation == token else { return }
                     if let result {
                         self.transcript = result.bestTranscription.formattedString
-                        if result.isFinal { self.deliverFinal() }
+                        self.onPartialTranscript?(self.transcript)
+                        if result.isFinal {
+                            self.recognizerFinished = true
+                            self.recording = false
+                            self.stopInput()
+                            if self.awaitingFinal { self.deliverFinal() }
+                        }
                     }
-                    if let error, self.recording {
+                    if let error, self.recording, !self.recognizerFinished {
                         self.errorMessage = error.localizedDescription
                         self.stopRecording(submit: false)
+                        self.onRecordingStopped?()
                     }
                 }
             }
@@ -91,16 +103,24 @@ final class NativeVoiceService: NSObject, ObservableObject, AVSpeechSynthesizerD
         }
     }
 
+    private func stopInput() {
+        if audioEngine.isRunning { audioEngine.stop() }
+        if tapInstalled {
+            audioEngine.inputNode.removeTap(onBus: 0)
+            tapInstalled = false
+            request?.endAudio()
+        }
+    }
+
     func stopRecording(submit: Bool) {
         guard recording || request != nil else { return }
         recording = false
-        if audioEngine.isRunning { audioEngine.stop() }
-        audioEngine.inputNode.removeTap(onBus: 0)
-        request?.endAudio()
+        stopInput()
         if submit {
             // Give Speech a bounded window to deliver its final hypothesis.
             // A partial transcript is used only after the timeout, never at a pause.
             awaitingFinal = true
+            if recognizerFinished { deliverFinal(); return }
             let token = generation
             finalizationTask?.cancel()
             finalizationTask = Task { @MainActor [weak self] in
@@ -116,7 +136,6 @@ final class NativeVoiceService: NSObject, ObservableObject, AVSpeechSynthesizerD
             recognitionTask = nil
             request = nil
         }
-        onRecordingStopped?()
     }
 
     private func deliverFinal() {
@@ -128,7 +147,8 @@ final class NativeVoiceService: NSObject, ObservableObject, AVSpeechSynthesizerD
         recognitionTask?.cancel()
         recognitionTask = nil
         request = nil
-        if !value.isEmpty { onFinalTranscript?(value) }
+        generation = UUID()
+        onFinalTranscript?(value)
     }
 
     func speak(_ text: String) {

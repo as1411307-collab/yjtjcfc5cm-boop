@@ -37,3 +37,11 @@ DerivedData/
 *.uai
 ios/UnifiedAI.xcodeproj/
 *.egg-info/
+
+# Local SQLite files outside the default data directory
+*.sqlite
+*.sqlite3
+*.db
+*.sqlite-*
+*.sqlite3-*
+*.db-*

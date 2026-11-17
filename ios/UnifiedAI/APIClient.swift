@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 struct SessionResponse: Decodable { let session_id: String }
@@ -11,13 +12,14 @@ struct ChatRequest: Encodable {
     let message: String
     let provider: String
     let request_id: String
+    let include_context: Bool
 }
-struct LearningCursorPage: Decodable {
+struct LearningCursorPage {
     let next_after_id: Int
     let has_more: Bool
 }
 struct ChatMessage: Identifiable {
-    let id = UUID()
+    var id = UUID().uuidString
     let role: String
     let content: String
 }
@@ -57,6 +59,11 @@ struct APIClient {
     let server: String
     let key: String
 
+    var accountScope: String {
+        SHA256.hash(data: Data((server + "\u{0}" + key).utf8))
+            .map { String(format: "%02x", $0) }.joined()
+    }
+
     private static let sessionIDPattern = "^[A-Za-z0-9_-]{1,100}$"
 
     /// Session IDs are embedded in URL paths; reject anything that is not a
@@ -68,7 +75,7 @@ struct APIClient {
     }
 
     private func requestData(_ path: String, method: String = "GET",
-                             body: Data? = nil) async throws -> Data {
+                             body: Data? = nil) async throws -> (Data, HTTPURLResponse) {
         guard let base = URL(string: server),
               base.scheme == "https",
               base.host != nil,
@@ -101,30 +108,29 @@ struct APIClient {
             }
             throw APIError.server(response.statusCode)
         }
-        return data
+        return (data, response)
     }
 
     private func request<T: Decodable>(_ path: String, method: String = "GET",
                                        body: Data? = nil) async throws -> T {
-        let data = try await requestData(path, method: method, body: body)
+        let (data, _) = try await requestData(path, method: method, body: body)
         return try JSONDecoder().decode(T.self, from: data)
     }
 
     /// Manual learning-evidence export; defaults to metadata-only on the server.
     func learningArchive(afterID: Int, limit: Int = 50,
-                         includeContent: Bool = false) async throws -> Data {
+                         includeContent: Bool = false) async throws -> (Data, LearningCursorPage) {
         guard afterID >= 0, (1...200).contains(limit) else { throw APIError.invalidURL }
         let path = "/learning/export?after_id=\(afterID)&limit=\(limit)&include_content=\(includeContent)"
-        let data = try await requestData(path)
+        let (data, response) = try await requestData(path)
         guard data.count <= 5_500_000 else {
             throw APIError.serverMessage("ملف التصدير أكبر من الحد المسموح")
         }
-        return data
-    }
-
-    func learningCursor(afterID: Int, limit: Int = 50) async throws -> LearningCursorPage {
-        guard afterID >= 0, (1...200).contains(limit) else { throw APIError.invalidURL }
-        return try await request("/learning/events?after_id=\(afterID)&limit=\(limit)")
+        guard let rawNext = response.value(forHTTPHeaderField: "X-Next-After-ID"),
+              let next = Int(rawNext), next >= afterID,
+              let rawMore = response.value(forHTTPHeaderField: "X-Has-More"),
+              let more = Bool(rawMore), !more || next > afterID else { throw APIError.invalidResponse }
+        return (data, LearningCursorPage(next_after_id: next, has_more: more))
     }
 
     func exportSession(_ session: String) async throws -> Data {
@@ -147,8 +153,8 @@ struct APIClient {
         return result.session_id
     }
 
-    func send(session: String, message: String, provider: String, requestID: String) async throws -> String {
-        let body = try JSONEncoder().encode(ChatRequest(session_id: session, message: message, provider: provider, request_id: requestID))
+    func send(session: String, message: String, provider: String, requestID: String, includeContext: Bool = true) async throws -> String {
+        let body = try JSONEncoder().encode(ChatRequest(session_id: session, message: message, provider: provider, request_id: requestID, include_context: includeContext))
         let result: ChatResponse = try await request("/chat", method: "POST", body: body)
         return result.answer
     }
@@ -158,12 +164,12 @@ struct APIClient {
         let _: DeleteMemoryResponse = try await request("/sessions/\(session)", method: "DELETE")
     }
 
-    func messagePage(session: String, afterID: Int = 0, limit: Int = 50) async throws -> MessagePage {
+    func messagePage(session: String, beforeID: Int = 0, limit: Int = 50) async throws -> MessagePage {
         try validateSessionID(session)
-        guard afterID >= 0, (1...100).contains(limit) else {
+        guard beforeID >= 0, (1...100).contains(limit) else {
             throw APIError.invalidURL
         }
-        return try await request("/sessions/\(session)/messages/page?after_id=\(afterID)&limit=\(limit)")
+        return try await request("/sessions/\(session)/messages/page?before_id=\(beforeID)&limit=\(limit)")
     }
 
     func insights(session: String) async throws -> ConversationInsights {
@@ -268,6 +274,7 @@ struct MessagePage: Decodable {
         let created_at: Int
     }
     let messages: [Entry]
+    let next_before_id: Int?
     let next_after_id: Int
     let has_more: Bool
 }

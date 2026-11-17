@@ -10,6 +10,7 @@ import core.backup as backup
 def test_restore_does_not_clobber_racer_created_destination(tmp_path, monkeypatch):
     original = tmp_path / "original.sqlite3"
     with sqlite3.connect(original) as conn:
+        conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("CREATE TABLE evidence(value TEXT)")
         conn.execute("INSERT INTO evidence VALUES ('kept')")
     encrypted = tmp_path / "backup.uai"
@@ -36,7 +37,7 @@ def test_ios_learning_export_does_not_embed_api_credentials_in_url():
     client = (root / "ios/UnifiedAI/APIClient.swift").read_text()
     view = (root / "ios/UnifiedAI/ContentView.swift").read_text()
     assert 'func learningArchive(afterID:' in client
-    assert 'func learningCursor(afterID:' in client
+    assert 'X-Next-After-ID' in client
     assert 'request.setValue(key, forHTTPHeaderField: "X-API-Key")' in client
     assert 'delegate: RejectRedirects()' in client
     assert '/learning/export?after_id=' in client

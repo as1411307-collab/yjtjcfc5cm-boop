@@ -1,5 +1,6 @@
 """Encrypted, authenticated SQLite backup for a single-user deployment."""
 import argparse
+from contextlib import closing
 import getpass
 import os
 import sqlite3
@@ -44,7 +45,7 @@ def create_backup(database: Path, destination: Path, password: str) -> None:
         raise FileExistsError(f"Refusing to overwrite: {destination}")
     with tempfile.TemporaryDirectory() as folder:
         snapshot = Path(folder) / "snapshot.sqlite3"
-        with sqlite3.connect(database) as source, sqlite3.connect(snapshot) as target:
+        with closing(sqlite3.connect(database.resolve().as_uri() + "?mode=ro", uri=True)) as source, closing(sqlite3.connect(snapshot)) as target:
             source.backup(target)
         plaintext = _read_bounded(snapshot, MAX_BACKUP_BYTES, "Database")
     salt, nonce = os.urandom(SALT_BYTES), os.urandom(NONCE_BYTES)
@@ -73,7 +74,7 @@ def restore_backup(source: Path, destination: Path, password: str) -> None:
         temp_path = Path(tmp.name)
         tmp.write(plaintext)
     try:
-        with sqlite3.connect(temp_path) as db:
+        with closing(sqlite3.connect(temp_path)) as db:
             check = db.execute("PRAGMA integrity_check").fetchone()
             if check is None or check[0] != "ok":
                 raise ValueError("SQLite integrity check failed")

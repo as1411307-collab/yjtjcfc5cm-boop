@@ -11,14 +11,14 @@ def test_ios_uses_cursor_api_instead_of_unbounded_history():
     api = (IOS / "APIClient.swift").read_text()
     view = (IOS / "ContentView.swift").read_text()
     assert 'func messagePage(session:' in api
-    assert 'after_id=\\(afterID)&limit=\\(limit)' in api
-    assert 'await client.messagePage(session: selected, afterID: cursor)' in view
+    assert 'before_id=\\(beforeID)&limit=\\(limit)' in api
+    assert 'await client.messagePage(session: selected, beforeID: cursor)' in view
     assert 'messages = try await client.history' not in view
 
 
 def test_ios_cursor_guards_stale_results():
     view = (IOS / "ContentView.swift").read_text()
-    assert 'sessionID == selected, historyCursor == cursor' in view
+    assert 'generation == historyGeneration' in view
     assert 'guard !loadingHistory, unlocked' in view
     assert 'hasMoreHistory = page.has_more' in view
 

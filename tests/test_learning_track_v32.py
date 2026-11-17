@@ -167,6 +167,8 @@ def test_export_next_cursor_is_lossless(client, app_module):
         response = client.get("/learning/export", params={"after_id": cursor, "limit": 4})
         assert response.status_code == 200
         manifest, events = zip_contents(response.content)
+        assert int(response.headers["X-Next-After-ID"]) == manifest["next_after_id"]
+        assert response.headers["X-Has-More"] == str(manifest["has_more"]).lower()
         ids.extend(item["id"] for item in events)
         cursor = manifest["next_after_id"]
         if not manifest["has_more"]:
@@ -222,3 +224,49 @@ def test_backup_reads_are_bounded_to_fstat_size(tmp_path):
     assert _read_bounded(source, 4, "File") == b"abcd"
     with pytest.raises(ValueError, match="exceeds maximum"):
         _read_bounded(source, 3, "File")
+
+def test_metadata_never_reads_the_messages_table(client, app_module):
+    import core.learning as learning
+    with app_module.db() as conn:
+        learning.append_event(conn, category="runtime", event="startup")
+        conn.set_authorizer(lambda action, table, *_:
+                            sqlite3.SQLITE_DENY if action == sqlite3.SQLITE_READ and table == "messages"
+                            else sqlite3.SQLITE_OK)
+        assert learning.read_page(conn, after_id=0, limit=10)["events"]
+        assert learning.build_zip(conn, after_id=0, limit=10, include_content=False)[0]
+
+
+def test_context_free_request_skips_stored_input_and_keeps_retry_semantics(client, app_module, monkeypatch):
+    session = create_session(client)
+    with app_module.db() as conn:
+        conn.execute("INSERT INTO messages(session_id,role,content,created_at) VALUES(?,?,?,0)",
+                     (session, "user", "previous conversation"))
+    def unexpected_memory_read():
+        pytest.fail("Context-free request read stored memories")
+    async def generate(prompt, provider):
+        assert "previous conversation" not in prompt
+        assert "current question" in prompt
+        return "answer"
+    monkeypatch.setattr(app_module, "_chat_memory_notes", unexpected_memory_read)
+    monkeypatch.setattr(app_module, "generate", generate)
+    data = dict(session_id=session, message="current question", include_context=False, request_id="context-free-0001")
+    assert client.post("/chat", json=data).status_code == 200
+    assert client.post("/chat", json=data).json()["idempotent_replay"]
+    assert client.post("/chat", json={**data, "include_context": True}).status_code == 409
+
+
+def test_latest_history_page_remains_stable_while_new_messages_arrive(client, app_module):
+    session = create_session(client)
+    def insert(lines):
+        with app_module.db() as conn:
+            conn.executemany("INSERT INTO messages(session_id,role,content,created_at) VALUES(?,?,?,0)",
+                             [(session, "user", line) for line in lines])
+    insert(["one", "two", "three", "four"])
+    url = f"/sessions/{session}/messages/page"
+    newest = client.get(url, params={"before_id": 0, "limit": 2}).json()
+    assert [row["content"] for row in newest["messages"]] == ["three", "four"]
+    insert(["five"])
+    older = client.get(url, params={"before_id": newest["next_before_id"], "limit": 2}).json()
+    assert [row["content"] for row in older["messages"]] == ["one", "two"]
+    assert not older["has_more"]
+    assert client.get(url, params={"before_id": 2, "after_id": 1}).status_code == 422

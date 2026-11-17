@@ -4,6 +4,9 @@ import UIKit
 struct ContentView: View {
     @AppStorage("serverURL") private var serverURL = ""
     @AppStorage("sessionID") private var sessionID = ""
+    @State private var serverDraft = ""
+    @State private var stagedCheckpoint: VoiceCheckpoint?
+    @AppStorage("includeConversationContext") private var includeContext = true
     @State private var apiKey = ""
     @State private var input = ""
     @State private var voiceReplyPending = false
@@ -12,6 +15,7 @@ struct ContentView: View {
     @State private var messages: [ChatMessage] = []
     @State private var historyCursor = 0
     @State private var hasMoreHistory = false
+    @State private var historyGeneration = UUID()
     @State private var loadingHistory = false
     @State private var serverStatus = ""
     @State private var insights: ConversationInsights?
@@ -41,6 +45,8 @@ struct ContentView: View {
     @State private var exportedConversationURL: URL?
     @State private var exportedLearningURL: URL?
     @State private var learningIncludeContent = false
+    @State private var exportGeneration = UUID()
+    @State private var preparedLearningPage: LearningCursorPage?
     @State private var learningAfterID = 0
     @State private var learningHasMore = true
     @State private var recentSessions: [ConversationSummary] = []
@@ -64,6 +70,11 @@ struct ContentView: View {
     private var client: APIClient {
         APIClient(server: serverURL.trimmingCharacters(in: .whitespacesAndNewlines),
                   key: SecretStore.load() ?? "")
+    }
+
+    private func privatePresentation(_ presented: Binding<Bool>) -> Binding<Bool> {
+        Binding(get: { unlocked && scenePhase == .active && presented.wrappedValue },
+                set: { presented.wrappedValue = $0 })
     }
 
     @MainActor
@@ -114,6 +125,12 @@ struct ContentView: View {
                     cancelPendingChat()
                     voiceCoordinator.appBecameInactive()
                     clearExportFile()
+                    showAgent = false
+                    showTaskBoard = false
+                    showMemories = false
+                    showSessions = false
+                    pendingNavigation = nil
+                    confirmConversationDeletion = false
                 }
                 if phase == .background {
                     agentPlan = nil
@@ -122,7 +139,7 @@ struct ContentView: View {
             }
             .confirmationDialog(
                 "هل تريد حذف المحادثة نهائيًا من الخادم؟",
-                isPresented: $confirmConversationDeletion,
+                isPresented: privatePresentation($confirmConversationDeletion),
                 titleVisibility: .visible
             ) {
                 Button("حذف المحادثة نهائيًا", role: .destructive) {
@@ -132,10 +149,10 @@ struct ContentView: View {
             } message: {
                 Text("سيُحذف سجل هذه المحادثة من قاعدة البيانات. قد تبقى نسخ سابقة في النسخ الاحتياطية وسجلات التدقيق.")
             }
-            .sheet(isPresented: $showAgent, onDismiss: { performPendingNavigation() }) { agentSheet }
-            .sheet(isPresented: $showTaskBoard) { taskBoardSheet }
-            .sheet(isPresented: $showMemories) { memorySheet }
-            .sheet(isPresented: $showSessions) { sessionsSheet }
+            .sheet(isPresented: privatePresentation($showAgent), onDismiss: { performPendingNavigation() }) { agentSheet }
+            .sheet(isPresented: privatePresentation($showTaskBoard)) { taskBoardSheet }
+            .sheet(isPresented: privatePresentation($showMemories)) { memorySheet }
+            .sheet(isPresented: privatePresentation($showSessions)) { sessionsSheet }
             .toolbar {
                 if unlocked {
                     ToolbarItem(placement: .topBarTrailing) {
@@ -171,11 +188,11 @@ struct ContentView: View {
                     }
                 }
             }
-            .alert("تنبيه", isPresented: Binding(get: { !notice.isEmpty }, set: { if !$0 { notice = "" } })) {
+            .alert("تنبيه", isPresented: Binding(get: { unlocked && scenePhase == .active && !notice.isEmpty }, set: { if !$0 { notice = "" } })) {
                 Button("حسنًا") { notice = "" }
             } message: { Text(notice) }
             .alert("الصوت", isPresented: Binding(
-                get: { !voiceCoordinator.alertMessage.isEmpty },
+                get: { unlocked && scenePhase == .active && !voiceCoordinator.alertMessage.isEmpty },
                 set: { if !$0 { voiceCoordinator.alertMessage = "" } }
             )) {
                 if voiceCoordinator.checkpointFailurePending {
@@ -184,7 +201,7 @@ struct ContentView: View {
                 Button("حسنًا") { voiceCoordinator.alertMessage = "" }
             } message: { Text(voiceCoordinator.alertMessage) }
             .alert("طلب موافقة", isPresented: Binding(
-                get: { voiceCoordinator.approvalCard != nil },
+                get: { unlocked && scenePhase == .active && voiceCoordinator.approvalCard != nil },
                 set: { if !$0 { voiceCoordinator.approvalCard = nil } }
             )) {
                 Button("حسنًا") { voiceCoordinator.approvalCard = nil }
@@ -480,14 +497,20 @@ struct ContentView: View {
                 if !serverStatus.isEmpty {
                     Text(serverStatus).font(.footnote)
                 }
-                TextField("https://your-private-server.example", text: $serverURL)
+                TextField("https://your-private-server.example", text: $serverDraft)
+                    .onAppear { serverDraft = serverURL }
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
                     .keyboardType(.URL)
                 SecureField("مفتاح API", text: $apiKey)
                 Button("حفظ الإعدادات") {
-                    guard URL(string: serverURL)?.scheme == "https" else {
+                    let endpoint = serverDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard let url = URL(string: endpoint), url.scheme == "https", url.host != nil,
+                          url.user == nil, url.password == nil else {
                         notice = "استخدم رابط HTTPS صالحًا"; return
+                    }
+                    if endpoint != serverURL && apiKey.isEmpty {
+                        notice = "أدخل مفتاح الخادم عند تغيير العنوان"; return
                     }
                     if !apiKey.isEmpty && !SecretStore.save(apiKey) {
                         notice = "تعذر حفظ المفتاح في Keychain"; return
@@ -495,6 +518,7 @@ struct ContentView: View {
                     guard SecretStore.load() != nil else {
                         notice = "أدخل مفتاح API"; return
                     }
+                    serverURL = endpoint
                     // A changed credential or endpoint invalidates every in-flight result.
                     cancelPendingChat()
                     voiceCoordinator.endSession()
@@ -505,24 +529,37 @@ struct ContentView: View {
                     hasMoreHistory = false
                     retryRequestID = nil
                     retryFingerprint = ""
+                    resetAccountView()
                     learningAfterID = 0
                     learningHasMore = true
                     apiKey = ""
                     showSettings = false
+                    voiceCoordinator.refreshPendingCheckpoints()
                 }
                 Button("حذف مفتاح الوصول", role: .destructive) {
                     cancelPendingChat()
                     voiceCoordinator.endSession()
                     clearExportFile()
+                    resetAccountView()
                     learningAfterID = 0
                     learningHasMore = true
                     SecretStore.clear()
+                    apiKey = ""
+                    voiceCoordinator.refreshPendingCheckpoints()
+                    clearExportFile()
+                    stagedCheckpoint = nil
+                    input = ""
                     sessionID = ""
                     insights = nil
-                historyCursor = 0
-                hasMoreHistory = false
+                    historyCursor = 0
+                    hasMoreHistory = false
                     messages = []
                 }
+            }
+            Section("سياق الرد") {
+                Toggle("استخدام السجل والذاكرة في الردود", isOn: $includeContext)
+                Text("عند إيقافه يجيب النموذج عن الرسالة الحالية وحدها. يظل التبادل محفوظاً في المحادثة.")
+                    .font(.footnote)
             }
             Section("مسار التعلم الصامت") {
                 Text("تصدير يدوي إلى Mac، بلا إرسال تلقائي أو تشغيل أدوات. يتم حفظ البيانات الوصفية فقط افتراضياً.")
@@ -542,9 +579,16 @@ struct ContentView: View {
                         }
                         Task { await prepareLearningExport() }
                     }
+                    .disabled(exportedLearningURL != nil)
                     if let exportedLearningURL {
                         ShareLink(item: exportedLearningURL) {
                             Label("مشاركة ZIP إلى Mac", systemImage: "square.and.arrow.up")
+                        }
+                        Button("تم نقل الملف إلى Mac") {
+                            guard let page = preparedLearningPage else { return }
+                            learningAfterID = page.next_after_id
+                            learningHasMore = page.has_more
+                            clearExportFile()
                         }
                     }
                     Text("حتى 50 حدثاً في الملف. شارك الملف قبل تجهيز الصفحة التالية.")
@@ -615,6 +659,8 @@ struct ContentView: View {
                     voiceCoordinator.endSession()
                     agentPlan = nil
                     localNavigationPlan = nil
+                    clearExportFile()
+                    stagedCheckpoint = nil
                     sessionID = item.id
                     insights = nil
                     messages = []
@@ -691,22 +737,33 @@ struct ContentView: View {
     }
 
     private func searchConversations() async {
+        let scope = client.accountScope
         let query = sessionSearch.trimmingCharacters(in: .whitespacesAndNewlines)
         guard query.count >= 2 else { return }
         do {
             let result = try await client.searchSessions(query)
-            guard sessionSearch.trimmingCharacters(in: .whitespacesAndNewlines) == query else { return }
+            guard unlocked, scenePhase == .active, scope == client.accountScope, sessionSearch.trimmingCharacters(in: .whitespacesAndNewlines) == query else { return }
             recentSessions = result
         } catch { notice = error.localizedDescription }
     }
 
     private func loadSessions() async {
-        do { recentSessions = try await client.sessions() }
+        let source = client
+        do {
+            let result = try await source.sessions()
+            guard unlocked, scenePhase == .active, source.accountScope == client.accountScope else { return }
+            recentSessions = result
+        }
         catch { notice = error.localizedDescription }
     }
 
     private func loadMemories() async {
-        do { personalMemories = try await client.memories() }
+        let source = client
+        do {
+            let result = try await source.memories()
+            guard unlocked, scenePhase == .active, source.accountScope == client.accountScope else { return }
+            personalMemories = result
+        }
         catch { notice = error.localizedDescription }
     }
 
@@ -738,7 +795,7 @@ struct ContentView: View {
                             }.id(message.id)
                         }
                     }.padding()
-                }.onChange(of: messages.count) { _, _ in
+                }.onChange(of: messages.last?.id) { _, _ in
                     if let last = messages.last { proxy.scrollTo(last.id, anchor: .bottom) }
                 }
             }
@@ -782,11 +839,11 @@ struct ContentView: View {
             }.padding()
             HStack(spacing: 14) {
                 Button {
-                    if !voice.recording { cancelPendingChat() }
+                    if voiceCoordinator.state.capture == .off { cancelPendingChat() }
                     voiceCoordinator.handleTalkButton()
                 } label: {
-                    Label(voice.recording ? "إنهاء التسجيل وإرسال" : "التحدث بالعربية",
-                          systemImage: voice.recording ? "stop.circle.fill" : "mic.fill")
+                    Label(voiceCoordinator.state.capture == .listening ? "إنهاء الكلام" : "التحدث بالعربية",
+                          systemImage: voiceCoordinator.state.capture == .listening ? "stop.circle.fill" : "mic.fill")
                 }
                 .buttonStyle(.borderedProminent)
                 
@@ -816,7 +873,7 @@ struct ContentView: View {
             }
             if !voiceCoordinator.pendingCheckpoints.isEmpty {
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("كلام محفوظ محلياً لم يُرسَل")
+                    Text("تسجيلات محفوظة للمراجعة أو الاسترداد")
                         .font(.footnote.bold())
                     ForEach(voiceCoordinator.pendingCheckpoints) { checkpoint in
                         HStack {
@@ -824,12 +881,12 @@ struct ContentView: View {
                                 .font(.footnote)
                                 .lineLimit(2)
                             Spacer()
-                            Button("استرداد") {
-                                input = checkpoint.text
-                                voiceCoordinator.discardCheckpoint(id: checkpoint.id)
+                            Button(checkpoint.context == nil ? "نسخ النص القديم" : "استرداد") {
+                                stageCheckpoint(checkpoint)
                             }
                             Button("حذف", role: .destructive) {
                                 voiceCoordinator.discardCheckpoint(id: checkpoint.id)
+                                if stagedCheckpoint?.id == checkpoint.id { stagedCheckpoint = nil; input = "" }
                             }
                         }
                         .font(.footnote)
@@ -862,10 +919,13 @@ struct ContentView: View {
                     localNavigationPlan = nil
                     retryRequestID = nil
                     retryFingerprint = ""
+                    clearExportFile()
+                    stagedCheckpoint = nil
+                    input = ""
                     sessionID = ""
                     insights = nil
-                historyCursor = 0
-                hasMoreHistory = false
+                    historyCursor = 0
+                    hasMoreHistory = false
                     messages = []
                 }
                 Button("حذف المحادثة من الخادم", role: .destructive) {
@@ -902,34 +962,36 @@ struct ContentView: View {
     }
 
     private func loadHistory() async {
-        let selectedSession = sessionID
-        guard !selectedSession.isEmpty, unlocked else { return }
+        historyGeneration = UUID()
+        loadingHistory = false
         historyCursor = 0
         hasMoreHistory = false
-        messages = []
-        await loadNextHistoryPage(for: selectedSession)
+        await loadNextHistoryPage()
     }
 
-    private func loadNextHistoryPage(for selectedSession: String? = nil) async {
-        guard !loadingHistory, unlocked else { return }
-        let selected = selectedSession ?? sessionID
-        guard !selected.isEmpty, selected == sessionID else { return }
+    private func loadNextHistoryPage() async {
+        guard !loadingHistory, unlocked, scenePhase == .active, !sessionID.isEmpty else { return }
+        let selected = sessionID
+        let generation = historyGeneration
+        let cursor = historyCursor
         loadingHistory = true
-        defer { loadingHistory = false }
+        defer { if generation == historyGeneration { loadingHistory = false } }
         do {
-            let cursor = historyCursor
-            let page = try await client.messagePage(session: selected, afterID: cursor)
-            guard unlocked, sessionID == selected, historyCursor == cursor, scenePhase == .active else { return }
-            messages.append(contentsOf: page.messages.map {
-                ChatMessage(role: $0.role, content: $0.content)
-            })
-            historyCursor = page.next_after_id
+            let page = try await client.messagePage(session: selected, beforeID: cursor)
+            guard generation == historyGeneration, unlocked, sessionID == selected,
+                  historyCursor == cursor, scenePhase == .active else { return }
+            guard let next = page.next_before_id else { throw APIError.invalidResponse }
+            let entries = page.messages.map { ChatMessage(id: String($0.id), role: $0.role, content: $0.content) }
+            if cursor == 0 {
+                messages = entries
+            } else {
+                messages.insert(contentsOf: entries, at: 0)
+            }
+            historyCursor = next
             hasMoreHistory = page.has_more
-            await refreshInsights(for: selected)
-        } catch is CancellationError {
-            return
+            if cursor == 0 { await refreshInsights(for: selected) }
         } catch {
-            guard unlocked, sessionID == selected else { return }
+            guard generation == historyGeneration, unlocked, sessionID == selected else { return }
             notice = error.localizedDescription
         }
     }
@@ -938,7 +1000,11 @@ struct ContentView: View {
     /// Closures read the view's State storage, so they always see current values.
     private func configureVoiceCoordinator() {
         voiceCoordinator.clientProvider = { client }
-        voiceCoordinator.contextProvider = { VoiceSubmitContext(sessionID: sessionID, provider: provider) }
+        voiceCoordinator.contextProvider = {
+            VoiceSubmitContext(account: client.accountScope, includeContext: includeContext,
+                               sessionID: sessionID, provider: provider)
+        }
+        voiceCoordinator.refreshPendingCheckpoints()
         voiceCoordinator.reviewPolicy = { reviewVoiceTranscript }
         voiceCoordinator.onSessionCreated = { newSessionID in
             sessionID = newSessionID
@@ -948,15 +1014,54 @@ struct ContentView: View {
             messages.append(ChatMessage(role: "user", content: text))
             messages.append(ChatMessage(role: "assistant", content: answer))
             input = ""
-            Task { await refreshInsights(for: exchangeSessionID) }
+            Task { await loadHistory() }
         }
-        voiceCoordinator.onUtteranceReadyForReview = { text in
-            input = text
+        voiceCoordinator.onUtteranceReadyForReview = { checkpoint in
+            stageCheckpoint(checkpoint)
             voiceReplyPending = true
         }
     }
 
+    private func stageCheckpoint(_ checkpoint: VoiceCheckpoint) {
+        guard unlocked, scenePhase == .active else { return }
+        if let context = checkpoint.context {
+            guard context.account == client.accountScope else { return }
+            if !context.sessionID.isEmpty && sessionID != context.sessionID {
+                cancelPendingChat()
+                voiceCoordinator.endSession()
+                clearExportFile()
+                sessionID = context.sessionID
+                messages = []
+                insights = nil
+                Task { await loadHistory() }
+            }
+            provider = context.provider
+        }
+        stagedCheckpoint = checkpoint
+        input = checkpoint.text
+    }
+
+    private func resetAccountView() {
+        historyGeneration = UUID()
+        loadingHistory = false
+        stagedCheckpoint = nil
+        input = ""
+        insights = nil
+        voiceReplyPending = false
+        learningIncludeContent = false
+        recentSessions = []
+        personalMemories = []
+        boardTasks = []
+        agentPlan = nil
+        newMemory = ""
+        boardTaskTitle = ""
+        agentCommand = ""
+        serverStatus = ""
+    }
+
     private func clearExportFile() {
+        exportGeneration = UUID()
+        preparedLearningPage = nil
         if let exportedConversationURL {
             try? FileManager.default.removeItem(at: exportedConversationURL)
         }
@@ -969,10 +1074,11 @@ struct ContentView: View {
 
     private func prepareExport() async {
         guard unlocked, !sessionID.isEmpty else { return }
+        let generation = exportGeneration
         do {
             let exporting = sessionID
             let data = try await client.exportSession(exporting)
-            guard unlocked, sessionID == exporting, scenePhase == .active else { return }
+            guard exportGeneration == generation, unlocked, sessionID == exporting, scenePhase == .active else { return }
             clearExportFile()
             let file = FileManager.default.temporaryDirectory
                 .appendingPathComponent("conversation-\(UUID().uuidString).json")
@@ -987,26 +1093,24 @@ struct ContentView: View {
         guard unlocked, scenePhase == .active,
               SecretStore.load() != nil, !serverURL.isEmpty else { return }
         let cursor = learningAfterID
+        let generation = UUID()
+        exportGeneration = generation
+        let source = client
+        let consent = learningIncludeContent
         do {
-            // Read the cursor BEFORE the ZIP: later events may be duplicated,
-            // but can never be skipped if a new event arrives during export.
-            let page = try await client.learningCursor(afterID: cursor, limit: 50)
-            let data = try await client.learningArchive(
-                afterID: cursor, limit: 50, includeContent: learningIncludeContent
-            )
-            guard unlocked, scenePhase == .active, learningAfterID == cursor,
-                  SecretStore.load() != nil else { return }
+            let (data, page) = try await source.learningArchive(afterID: cursor, limit: 50, includeContent: consent)
+            guard exportGeneration == generation, unlocked, scenePhase == .active,
+                  consent == learningIncludeContent, source.accountScope == client.accountScope else { return }
             clearExportFile()
             let file = FileManager.default.temporaryDirectory
                 .appendingPathComponent("learning-\(cursor)-\(UUID().uuidString).zip")
             try data.write(to: file, options: [.atomic, .completeFileProtection])
             exportedLearningURL = file
-            learningAfterID = page.next_after_id
-            learningHasMore = page.has_more
+            preparedLearningPage = page
         } catch is CancellationError {
             return
         } catch {
-            guard unlocked, scenePhase == .active else { return }
+            guard exportGeneration == generation, unlocked, scenePhase == .active else { return }
             notice = error.localizedDescription
         }
     }
@@ -1033,6 +1137,7 @@ struct ContentView: View {
 
     private func startSend(speakAnswer: Bool = false) {
         guard !busy else { return }
+        voiceCoordinator.cancelInFlightSubmission()
         let shouldSpeak = speakAnswer || voiceReplyPending
         voiceReplyPending = false
         let generation = UUID()
@@ -1060,17 +1165,31 @@ struct ContentView: View {
             } else {
                 currentSession = sessionID
             }
-            let selectedProvider = provider
-            let fingerprint = "\(currentSession)\u{1F}\(selectedProvider)\u{1F}\(text)"
+            let checkpoint = stagedCheckpoint
+            let matches = checkpoint?.text.trimmingCharacters(in: .whitespacesAndNewlines) == text
+            let original = matches ? checkpoint?.context : nil
+            let source = client
+            if let original, original.account != source.accountScope ||
+                (!original.sessionID.isEmpty && original.sessionID != currentSession) {
+                notice = "استرد التسجيل من محادثته الأصلية"; return
+            }
+            let selectedProvider = original?.provider ?? provider
+            let useContext = original?.includeContext ?? includeContext
+            let fingerprint = "\(currentSession)\u{1F}\(selectedProvider)\u{1F}\(useContext)\u{1F}\(text)"
             let requestID: String
-            if retryFingerprint == fingerprint, let savedID = retryRequestID {
+            if matches, let checkpoint, original != nil {
+                requestID = checkpoint.id.uuidString
+                let bound = VoiceSubmitContext(account: source.accountScope, includeContext: useContext,
+                                               sessionID: currentSession, provider: selectedProvider)
+                try voiceCoordinator.bindCheckpoint(checkpoint, to: bound)
+            } else if retryFingerprint == fingerprint, let savedID = retryRequestID {
                 requestID = savedID
             } else {
                 requestID = UUID().uuidString
             }
             retryFingerprint = fingerprint
             retryRequestID = requestID
-            let answer = try await client.send(session: currentSession, message: text, provider: selectedProvider, requestID: requestID)
+            let answer = try await client.send(session: currentSession, message: text, provider: selectedProvider, requestID: requestID, includeContext: useContext)
             try Task.checkCancellation()
             guard requestGeneration == generation, unlocked, scenePhase == .active else { return }
             messages.append(ChatMessage(role: "user", content: text))
@@ -1078,8 +1197,10 @@ struct ContentView: View {
             input = ""
             retryRequestID = nil
             retryFingerprint = ""
+            if matches, let checkpoint, original != nil { voiceCoordinator.discardCheckpoint(id: checkpoint.id) }
+            stagedCheckpoint = nil
             if speakAnswer { voice.speak(answer) }
-            await refreshInsights(for: currentSession)
+            await loadHistory()
         } catch is CancellationError {
             return
         } catch {

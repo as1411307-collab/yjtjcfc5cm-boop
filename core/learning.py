@@ -83,31 +83,17 @@ def append_event(
     return cursor.lastrowid
 
 
-def read_page(conn: sqlite3.Connection, *, after_id: int, limit: int, include_content: bool = False) -> dict:
+def read_page(conn: sqlite3.Connection, *, after_id: int, limit: int) -> dict:
     if after_id < 0 or not 1 <= limit <= 200:
         raise ValueError("Invalid learning event page")
     rows = conn.execute(
-        "SELECT e.*, input.content AS input_text, output.content AS output_text "
-        "FROM learning_events e "
-        "LEFT JOIN messages input ON input.id=e.input_message_id AND input.session_id=e.session_id "
-        "LEFT JOIN messages output ON output.id=e.output_message_id AND output.session_id=e.session_id "
-        "WHERE e.id>? ORDER BY e.id LIMIT ?",
+        "SELECT * FROM learning_events WHERE id>? ORDER BY id LIMIT ?",
         (after_id, limit + 1),
     ).fetchall()
-    selected = rows[:limit]
     events = []
-    for row in selected:
-        item = {
-            key: row[key] for key in (
-                "id", "category", "event", "status", "session_id", "request_id",
-                "provider", "model", "input_message_id", "output_message_id",
-                "input_sha256", "output_sha256", "created_at"
-            )
-        }
-        item["details"] = json.loads(row["details_json"])
-        if include_content:
-            item["input_text"] = row["input_text"]
-            item["output_text"] = row["output_text"]
+    for row in rows[:limit]:
+        item = dict(row)
+        item["details"] = json.loads(item.pop("details_json"))
         events.append(item)
     return {
         "schema_version": SCHEMA_VERSION,
@@ -117,26 +103,58 @@ def read_page(conn: sqlite3.Connection, *, after_id: int, limit: int, include_co
     }
 
 
-def build_zip(conn: sqlite3.Connection, *, after_id: int, limit: int, include_content: bool) -> bytes:
-    page = read_page(conn, after_id=after_id, limit=limit, include_content=include_content)
-    event_lines = [json.dumps(item, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-                   for item in page["events"]]
-    event_text = ("\n".join(event_lines) + "\n").encode("utf-8") if event_lines else b""
-    if len(event_text) > MAX_EXPORT_BYTES:
+def _transcript(conn, event, field, remaining):
+    message_id = event[field]
+    if message_id is None:
+        return None
+    # Check byte size in SQLite before materializing a legacy oversized message.
+    row = conn.execute(
+        "SELECT length(CAST(content AS BLOB)) AS size, "
+        "CASE WHEN length(CAST(content AS BLOB)) <= ? THEN content END AS text "
+        "FROM messages WHERE id=? AND session_id=?",
+        (remaining, message_id, event["session_id"]),
+    ).fetchone()
+    if row is None:
+        return None
+    if row["size"] > remaining:
         raise ValueError("Learning export exceeds the byte limit; use smaller pages")
-    manifest = {
-        "schema_version": SCHEMA_VERSION,
-        "generated_utc": datetime.now(timezone.utc).isoformat(),
-        "after_id": after_id,
-        "next_after_id": page["next_after_id"],
-        "has_more": page["has_more"],
-        "record_count": len(event_lines),
-        "include_content": include_content,
-        "content_policy": "Conversation text is resolved by reference; deleting a session removes its text.",
-        "thinking_policy": "Only observable inputs, outputs, and metadata; no hidden model reasoning.",
-    }
+    return row["text"]
+
+
+def build_zip(conn: sqlite3.Connection, *, after_id: int, limit: int, include_content: bool):
+    if not conn.in_transaction:
+        conn.execute("BEGIN")
+    page = read_page(conn, after_id=after_id, limit=limit)
     output = io.BytesIO()
+    remaining = MAX_EXPORT_BYTES
     with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        with archive.open("events.jsonl", "w") as lines:
+            for event in page["events"]:
+                if include_content:
+                    content_budget = remaining
+                    for field in ("input", "output"):
+                        value = _transcript(conn, event, field + "_message_id", content_budget)
+                        event[field + "_text"] = value
+                        if value is not None:
+                            content_budget -= len(value.encode("utf-8"))
+                line = json.dumps(event, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+                remaining -= len(line) + 1
+                if remaining < 0:
+                    raise ValueError("Learning export exceeds the byte limit; use smaller pages")
+                lines.write(line)
+                lines.write(b"\n")
+                event.pop("input_text", None)
+                event.pop("output_text", None)
+        manifest = {
+            "schema_version": SCHEMA_VERSION,
+            "generated_utc": datetime.now(timezone.utc).isoformat(),
+            "after_id": after_id,
+            "next_after_id": page["next_after_id"],
+            "has_more": page["has_more"],
+            "record_count": len(page["events"]),
+            "include_content": include_content,
+            "content_policy": "Conversation text is resolved by reference; deleting a session removes its text.",
+            "thinking_policy": "Only observable inputs, outputs, and metadata; no hidden model reasoning.",
+        }
         archive.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False, indent=2))
-        archive.writestr("events.jsonl", event_text)
-    return output.getvalue()
+    return output.getvalue(), page["next_after_id"], page["has_more"]

@@ -50,5 +50,5 @@ def test_ios_insights_are_session_scoped_and_optional():
     view = (base / "ContentView.swift").read_text()
     assert 'request("/sessions/\\(session)/insights")' in api
     assert "sessionID == selected" in view
-    assert "await refreshInsights(for: currentSession)" in view
+    assert "if cursor == 0 { await refreshInsights(for: selected) }" in view
     assert "insights = nil" in view

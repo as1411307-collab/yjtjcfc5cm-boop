@@ -59,7 +59,7 @@ def start_core(root: Path, port: int, database: Path, provider_port: int, key: s
     )
     for _ in range(80):
         try:
-            response = httpx.get(f"http://127.0.0.1:{port}/health", timeout=1)
+            response = httpx.get(f"http://127.0.0.1:{port}/health", timeout=1, trust_env=False)
             if response.status_code == 200:
                 return process
         except httpx.HTTPError:
@@ -91,7 +91,7 @@ def test_real_http_persistence_retry_restart_and_restore(tmp_path):
         core_process = start_core(root, core_port, database, provider_port, key)
         base = f"http://127.0.0.1:{core_port}"
         headers = {"X-API-Key": key}
-        with httpx.Client(base_url=base, headers=headers, timeout=10) as client:
+        with httpx.Client(base_url=base, headers=headers, timeout=10, trust_env=False) as client:
             session = client.post("/sessions").json()["session_id"]
             payload = {
                 "session_id": session,
@@ -110,7 +110,7 @@ def test_real_http_persistence_retry_restart_and_restore(tmp_path):
         core_process = None
 
         core_process = start_core(root, core_port, database, provider_port, key)
-        with httpx.Client(base_url=base, headers=headers, timeout=10) as client:
+        with httpx.Client(base_url=base, headers=headers, timeout=10, trust_env=False) as client:
             history = client.get(f"/sessions/{session}/messages").json()["messages"]
             assert len(history) == 2
             after_restart = client.post("/chat", json=payload)

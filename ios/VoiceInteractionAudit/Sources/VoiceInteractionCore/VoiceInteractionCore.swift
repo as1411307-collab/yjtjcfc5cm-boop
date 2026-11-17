@@ -65,6 +65,7 @@ public struct SpokenResponse: Sendable, Equatable {
 
 public struct RecognizedTurn: Sendable, Equatable {
     public let id: UUID
+    public var partialTranscript: String?
     public var finalTranscript: String?
     public var readyToSubmit: Bool
     public var submitted: Bool
@@ -113,6 +114,7 @@ public enum VoiceEvent: Sendable {
     /// isConfirmed must be based on user speech evidence, NOT every VAD/audio peak.
     case userSpeechStarted(turnID: UUID, isConfirmed: Bool)
     case userSpeechStopped(turnID: UUID, semanticTurnComplete: Bool)
+    case partialTranscript(turnID: UUID, text: String)
     case finalTranscript(turnID: UUID, text: String)
     case checkpointPersisted(turnID: UUID)
     case checkpointFailed(turnID: UUID)
@@ -168,7 +170,7 @@ public struct VoiceInteractionReducer: Sendable {
     ) -> [VoiceEffect] {
         switch event {
         case .microphoneDidStart, .microphoneStartFailed,
-             .userSpeechStarted, .userSpeechStopped, .finalTranscript,
+             .userSpeechStarted, .userSpeechStopped, .partialTranscript, .finalTranscript,
              .assistantAudioStarted, .assistantAudioPacket,
              .audioPlayhead, .localPlaybackFinished,
              .checkpointPersisted, .checkpointFailed:
@@ -267,9 +269,7 @@ public struct VoiceInteractionReducer: Sendable {
             effects.append(.endMicrophone)
             state.turn?.readyToSubmit = true
             submitIfReady(effects: &effects)
-            if state.turn?.checkpointPending != true {
-                // Nothing is being persisted, so nothing will ever ACK this wait:
-                // re-arm the button instead of wedging capture forever.
+            if state.turn == nil || state.turn?.submitted == true {
                 state.capture = .off
             }
 
@@ -293,6 +293,10 @@ public struct VoiceInteractionReducer: Sendable {
             }
             // A silence timeout alone is not authority to send a partial thought.
 
+        case .partialTranscript(let id, let text):
+            guard state.active, state.turn?.id == id, state.turn?.submitted == false else { break }
+            state.turn?.partialTranscript = text
+
         case .finalTranscript(let id, let text):
             // Once a checkpoint starts (or fails awaiting retry) the text is frozen:
             // the archived checkpoint is the source of truth for what gets sent.
@@ -300,6 +304,11 @@ public struct VoiceInteractionReducer: Sendable {
                   state.turn?.submitted == false,
                   state.turn?.checkpointPending == false,
                   state.turn?.checkpointFailed == false else { break }
+            if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                state.turn = nil
+                if state.capture == .awaitingFinalTranscript { state.capture = .off }
+                break
+            }
             state.turn?.finalTranscript = text
             submitIfReady(effects: &effects)
 
@@ -338,9 +347,7 @@ public struct VoiceInteractionReducer: Sendable {
             }
             state.turn?.readyToSubmit = true
             submitIfReady(effects: &effects)
-            if state.turn?.checkpointPending != true {
-                // Same dead-end guard as pushToTalkReleased: no pending checkpoint
-                // means no ACK will ever clear .awaitingFinalTranscript.
+            if state.turn == nil || state.turn?.submitted == true {
                 state.capture = .off
             }
 
@@ -435,7 +442,7 @@ public struct VoiceInteractionReducer: Sendable {
         }
         if let turn = state.turn, turn.submitted == false,
            turn.checkpointPending == false,
-           let transcript = turn.finalTranscript?.trimmingCharacters(in: .whitespacesAndNewlines),
+           let transcript = (turn.finalTranscript ?? turn.partialTranscript)?.trimmingCharacters(in: .whitespacesAndNewlines),
            !transcript.isEmpty {
             // A pending checkpoint already persists the full text under turn.id;
             // a draft here would duplicate that write.

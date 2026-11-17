@@ -387,6 +387,33 @@ final class VoiceInteractionCoreTests: XCTestCase {
         XCTAssertEqual(r.apply(.pushToTalkPressed), [.beginMicrophone])
     }
 
+    func testLateFinalAfterReleaseStillRequiresDurableCheckpoint() {
+        var r = makeRunning(mode: .pushToTalk)
+        let id = UUID()
+        r.apply(.pushToTalkPressed)
+        r.apply(.microphoneDidStart)
+        r.apply(.userSpeechStarted(turnID: id, isConfirmed: true))
+        r.apply(.pushToTalkReleased)
+        XCTAssertEqual(r.state.capture, .awaitingFinalTranscript)
+        XCTAssertEqual(r.apply(.finalTranscript(turnID: id, text: "آخر كلمة")), [
+            .checkpointUtterance(id: id, text: "آخر كلمة")
+        ])
+        XCTAssertEqual(r.apply(.checkpointPersisted(turnID: id)), [
+            .submitUtterance(id: id, text: "آخر كلمة")
+        ])
+    }
+
+    func testInterruptionPreservesOnlyThePartialDraft() {
+        var r = makeRunning()
+        let id = UUID()
+        r.apply(.userSpeechStarted(turnID: id, isConfirmed: true))
+        XCTAssertTrue(r.apply(.partialTranscript(turnID: id, text: "مسودة")).isEmpty)
+        let effects = r.apply(.systemInterruption)
+        XCTAssertTrue(effects.contains(.checkpointDraft(id: id, text: "مسودة")))
+        XCTAssertFalse(effects.contains(.submitUtterance(id: id, text: "مسودة")))
+        XCTAssertFalse(r.state.active)
+    }
+
     func testPushToTalkEmptyTranscriptDoesNotDeadlock() {
         var r = makeRunning(mode: .pushToTalk)
         XCTAssertEqual(r.apply(.pushToTalkPressed), [.beginMicrophone])

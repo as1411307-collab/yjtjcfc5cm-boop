@@ -30,7 +30,7 @@ def test_checkpoint_store_is_durable_atomic_and_idempotent():
     assert "final class FileVoiceCheckpointStore: VoiceCheckpointStore" in coordinator
     assert "voice-checkpoints" in coordinator
     assert "[.atomic, .completeFileProtection]" in coordinator
-    assert "func pendingCheckpoints() -> [(UUID, String)]" in coordinator
+    assert "func pendingCheckpoints() -> [VoiceCheckpoint]" in coordinator
 
 
 def test_system_monitors_feed_policy_events():

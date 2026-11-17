@@ -4,7 +4,8 @@ import Network
 import VoiceInteractionCore
 
 /// A single durable checkpoint record for one voice turn.
-struct VoiceCheckpoint: Codable, Equatable {
+struct VoiceCheckpoint: Codable, Equatable, Identifiable {
+    var context: VoiceSubmitContext? = nil
     let id: UUID
     let text: String
     /// Drafts were interrupted before the user confirmed; utterances were
@@ -15,9 +16,9 @@ struct VoiceCheckpoint: Codable, Equatable {
 /// Durable per-turn storage so a confirmed utterance survives a crash or
 /// backgrounding between recognition and server acknowledgement.
 protocol VoiceCheckpointStore {
-    func persistUtterance(id: UUID, text: String) throws
-    func persistDraft(id: UUID, text: String) throws
-    func pendingCheckpoints() -> [(UUID, String)]
+    func persistUtterance(id: UUID, text: String, context: VoiceSubmitContext) throws
+    func persistDraft(id: UUID, text: String, context: VoiceSubmitContext) throws
+    func pendingCheckpoints() -> [VoiceCheckpoint]
     func discard(id: UUID)
 }
 
@@ -44,26 +45,26 @@ final class FileVoiceCheckpointStore: VoiceCheckpointStore {
         try data.write(to: fileURL(for: checkpoint.id), options: [.atomic, .completeFileProtection])
     }
 
-    func persistUtterance(id: UUID, text: String) throws {
-        try write(VoiceCheckpoint(id: id, text: text, draft: false))
+    func persistUtterance(id: UUID, text: String, context: VoiceSubmitContext) throws {
+        try write(VoiceCheckpoint(context: context, id: id, text: text, draft: false))
     }
 
-    func persistDraft(id: UUID, text: String) throws {
-        try write(VoiceCheckpoint(id: id, text: text, draft: true))
+    func persistDraft(id: UUID, text: String, context: VoiceSubmitContext) throws {
+        try write(VoiceCheckpoint(context: context, id: id, text: text, draft: true))
     }
 
-    func pendingCheckpoints() -> [(UUID, String)] {
+    func pendingCheckpoints() -> [VoiceCheckpoint] {
         guard let names = try? FileManager.default.contentsOfDirectory(atPath: directory.path) else {
             return []
         }
-        var result: [(UUID, String)] = []
+        var result: [VoiceCheckpoint] = []
         for name in names.sorted() where name.hasSuffix(".json") {
             let url = directory.appendingPathComponent(name)
             guard let data = try? Data(contentsOf: url),
                   let checkpoint = try? JSONDecoder().decode(VoiceCheckpoint.self, from: data) else {
                 continue
             }
-            result.append((checkpoint.id, checkpoint.text))
+            result.append(checkpoint)
         }
         return result
     }
@@ -73,12 +74,6 @@ final class FileVoiceCheckpointStore: VoiceCheckpointStore {
     }
 }
 
-/// A checkpoint recovered from disk, shown to the user for manual resend only.
-struct PendingVoiceCheckpoint: Identifiable, Equatable {
-    let id: UUID
-    let text: String
-}
-
 /// A voice-originated approval request; approval itself never happens by voice.
 struct VoiceApprovalCard: Equatable {
     let id: String
@@ -86,7 +81,9 @@ struct VoiceApprovalCard: Equatable {
 }
 
 /// Snapshot of everything a voice submission needs from the conversation UI.
-struct VoiceSubmitContext {
+struct VoiceSubmitContext: Codable, Equatable {
+    let account: String
+    var includeContext: Bool? = nil
     let sessionID: String
     let provider: String
 }
@@ -97,7 +94,7 @@ struct VoiceSubmitContext {
 @MainActor
 final class VoiceSessionCoordinator: ObservableObject {
     @Published private(set) var state = VoiceState()
-    @Published private(set) var pendingCheckpoints: [PendingVoiceCheckpoint] = []
+    @Published private(set) var pendingCheckpoints: [VoiceCheckpoint] = []
     @Published var alertMessage = ""
     @Published var approvalCard: VoiceApprovalCard?
     @Published private(set) var checkpointFailurePending = false
@@ -117,8 +114,9 @@ final class VoiceSessionCoordinator: ObservableObject {
     var onSessionCreated: ((String) -> Void)?
     /// (sessionID, userText, answer) after a successful voice submission.
     var onVoiceExchange: ((String, String, String) -> Void)?
-    var onUtteranceReadyForReview: ((String) -> Void)?
+    var onUtteranceReadyForReview: ((VoiceCheckpoint) -> Void)?
 
+    private var authorizationTask: Task<Void, Never>?
     private var activeTurnID: UUID?
     private var submissionTask: Task<Void, Never>?
     private var pathMonitor: NWPathMonitor?
@@ -144,6 +142,15 @@ final class VoiceSessionCoordinator: ObservableObject {
     /// Single funnel: every event passes through the policy reducer, then each
     /// returned effect is executed immediately and its confirmation is fed back.
     func dispatch(_ event: VoiceEvent, providerSessionID: UUID? = nil) {
+        switch event {
+        case .userEndedSession, .appInactive, .connectionChanged(false), .systemInterruption, .routeChanged:
+            authorizationTask?.cancel()
+            authorizationTask = nil
+            activeTurnID = nil
+            cancelInFlightSubmission()
+        default:
+            break
+        }
         if let providerSessionID {
             policy.receiveProviderEvent(event, sessionID: providerSessionID)
         } else {
@@ -159,13 +166,17 @@ final class VoiceSessionCoordinator: ObservableObject {
 
     /// Microphone button: push-to-talk press/release through the policy gate.
     func handleTalkButton() {
-        if audio.recording {
+        if policy.state.capture == .listening {
             dispatch(.pushToTalkReleased)
             return
         }
-        Task { [weak self] in
+        guard authorizationTask == nil, policy.state.capture == .off else { return }
+        cancelInFlightSubmission()
+        authorizationTask = Task { [weak self] in
             guard let self else { return }
             let granted = await self.audio.authorize()
+            guard !Task.isCancelled else { return }
+            self.authorizationTask = nil
             self.dispatch(.microphonePermissionChanged(granted))
             guard granted else { return }
             self.dispatch(.userStartedSession)
@@ -205,8 +216,16 @@ final class VoiceSessionCoordinator: ObservableObject {
         refreshPendingCheckpoints()
     }
 
+    func bindCheckpoint(_ checkpoint: VoiceCheckpoint, to context: VoiceSubmitContext) throws {
+        try store.persistUtterance(id: checkpoint.id, text: checkpoint.text, context: context)
+        refreshPendingCheckpoints()
+    }
+
     func refreshPendingCheckpoints() {
-        pendingCheckpoints = store.pendingCheckpoints().map { PendingVoiceCheckpoint(id: $0.0, text: $0.1) }
+        guard let current = contextProvider?() else { pendingCheckpoints = []; return }
+        pendingCheckpoints = store.pendingCheckpoints().filter {
+            $0.context?.account == current.account || $0.context == nil
+        }
     }
 
     // MARK: - Effect execution
@@ -221,16 +240,13 @@ final class VoiceSessionCoordinator: ObservableObject {
             let awaitingTranscript = policy.state.capture == .awaitingFinalTranscript
             audio.stopRecording(submit: awaitingTranscript)
         case .requestMicrophonePermission:
-            Task { [weak self] in
-                guard let self else { return }
-                let granted = await self.audio.authorize()
-                self.dispatch(.microphonePermissionChanged(granted))
-            }
+            handleTalkButton()
         case .checkpointUtterance(let id, let text):
             persistUtteranceCheckpoint(id: id, text: text)
         case .checkpointDraft(let id, let text):
             do {
-                try store.persistDraft(id: id, text: text)
+                guard let context = contextProvider?() else { return }
+                try store.persistDraft(id: id, text: text, context: context)
             } catch {
                 alertMessage = "تعذر حفظ مسودة الكلام محلياً."
             }
@@ -257,29 +273,24 @@ final class VoiceSessionCoordinator: ObservableObject {
     }
 
     private func beginMicrophoneCapture() {
+        guard policy.state.active, let token = policy.state.sessionID else { return }
         let turnID = UUID()
         activeTurnID = turnID
-        Task { [weak self] in
-            guard let self else { return }
-            let started = await self.audio.start()
-            guard let token = self.policy.state.sessionID else {
-                // Session ended while the audio engine was starting.
-                if started { self.audio.stopRecording(submit: false) }
-                return
-            }
-            if started {
-                self.dispatch(.microphoneDidStart, providerSessionID: token)
-                self.dispatch(.userSpeechStarted(turnID: turnID, isConfirmed: true), providerSessionID: token)
-            } else {
-                self.dispatch(.microphoneStartFailed, providerSessionID: token)
-            }
+        // Authorization has completed. Engine start and its acknowledgement run on
+        // MainActor without a suspension between the lifecycle check and capture.
+        if audio.start() {
+            dispatch(.microphoneDidStart, providerSessionID: token)
+            dispatch(.userSpeechStarted(turnID: turnID, isConfirmed: true), providerSessionID: token)
+        } else {
+            dispatch(.microphoneStartFailed, providerSessionID: token)
         }
     }
 
     private func persistUtteranceCheckpoint(id: UUID, text: String) {
         // Persist first (fail closed), then confirm back to the reducer.
         do {
-            try store.persistUtterance(id: id, text: text)
+            guard let context = contextProvider?() else { throw APIError.invalidResponse }
+            try store.persistUtterance(id: id, text: text, context: context)
             checkpointFailurePending = false
         } catch {
             if let token = policy.state.sessionID {
@@ -300,8 +311,10 @@ final class VoiceSessionCoordinator: ObservableObject {
     private func submitUtterance(id: UUID, text: String) {
         if reviewPolicy?() == true {
             // Review mode: stage the text for an explicit manual send instead.
-            store.discard(id: id)
-            onUtteranceReadyForReview?(text)
+            refreshPendingCheckpoints()
+            if let checkpoint = pendingCheckpoints.first(where: { $0.id == id }) {
+                onUtteranceReadyForReview?(checkpoint)
+            }
             return
         }
         guard let contextProvider, let clientProvider else {
@@ -318,23 +331,24 @@ final class VoiceSessionCoordinator: ObservableObject {
                 if session.isEmpty {
                     session = try await client.newSession()
                     try Task.checkCancellation()
+                    let assigned = VoiceSubmitContext(account: context.account, includeContext: context.includeContext, sessionID: session, provider: context.provider)
+                    try self.store.persistUtterance(id: id, text: text, context: assigned)
                     self.onSessionCreated?(session)
                 }
                 let answer = try await client.send(
                     session: session, message: text, provider: context.provider,
-                    requestID: id.uuidString
+                    requestID: id.uuidString, includeContext: context.includeContext ?? true
                 )
                 try Task.checkCancellation()
                 self.store.discard(id: id)
                 self.refreshPendingCheckpoints()
                 self.onVoiceExchange?(session, text, answer)
                 self.audio.speak(answer)
-            } catch is CancellationError {
-                return
             } catch {
                 // Fail closed: the durable checkpoint stays on disk and is
                 // offered as a manual draft; nothing is resent automatically.
                 self.refreshPendingCheckpoints()
+                guard !Task.isCancelled else { return }
                 self.alertMessage = error.localizedDescription
             }
         }
@@ -343,6 +357,14 @@ final class VoiceSessionCoordinator: ObservableObject {
     // MARK: - Audio service callbacks
 
     private func wireAudioCallbacks() {
+        audio.onRecordingStopped = { [weak self] in
+            guard let self, self.policy.state.active else { return }
+            self.dispatch(.systemInterruption)
+        }
+        audio.onPartialTranscript = { [weak self] text in
+            guard let self, let id = self.activeTurnID, let session = self.policy.state.sessionID else { return }
+            self.dispatch(.partialTranscript(turnID: id, text: text), providerSessionID: session)
+        }
         audio.onFinalTranscript = { [weak self] text in
             self?.handleFinalTranscript(text)
         }
