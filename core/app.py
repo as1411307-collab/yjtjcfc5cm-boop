@@ -13,9 +13,8 @@ from typing import Literal
 
 import httpx
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
-from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.responses import JSONResponse, Response
 from core.learning import LearningCategory, initialize as initialize_learning, append_event as append_learning_event, digest as learning_digest, read_page as read_learning_page, build_zip as build_learning_zip
-from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 DB_PATH = Path(os.getenv("DB_PATH", "./data/core.sqlite3"))
@@ -30,7 +29,6 @@ LANGFLOW_FLOW_ID = os.getenv("LANGFLOW_FLOW_ID", "")
 LANGFLOW_API_KEY = os.getenv("LANGFLOW_API_KEY", "")
 MAX_BODY_BYTES = 128 * 1024
 CHAT_LEASE_SECONDS = 120
-WEB_DIR = Path(__file__).resolve().parent / "web"
 REQUIRED_TABLES = frozenset({"sessions", "messages", "approvals", "memories", "tasks", "agent_plans", "chat_requests", "audit", "learning_events"})
 
 
@@ -129,7 +127,6 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Unified AI Core", version="0.3.0", lifespan=lifespan,
               docs_url=None, redoc_url=None, openapi_url=None)
-app.mount("/static", StaticFiles(directory=WEB_DIR), name="static")
 
 # Limit concurrent expensive model calls for a single-user server.
 _model_slots = asyncio.Semaphore(2)
@@ -251,11 +248,6 @@ class SessionUpdate(BaseModel):
 
 class DecisionInput(BaseModel):
     approve: bool
-
-
-@app.get("/")
-def index():
-    return FileResponse(WEB_DIR / "index.html")
 
 
 @app.get("/health")
