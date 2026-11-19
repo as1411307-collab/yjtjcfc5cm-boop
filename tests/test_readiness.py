@@ -48,7 +48,10 @@ def test_readiness_returns_503_if_database_missing():
                 assert response.json()["detail"] == "Database unavailable"
 
 
-REQUIRED_TABLES = ("sessions", "messages", "approvals", "memories", "audit")
+REQUIRED_TABLES = (
+    "sessions", "messages", "approvals", "memories",
+    "tasks", "agent_plans", "chat_requests", "audit",
+)
 
 
 # Exercise failures after startup so initialize() cannot repair the test state.
@@ -107,14 +110,14 @@ def test_readiness_accepts_initialized_database_without_changing_data(ready_clie
     # Keep the writer open to also exercise a live WAL database.
     with closing(sqlite3.connect(module.DB_PATH)) as conn:
         assert conn.execute(f"PRAGMA journal_mode={journal_mode}").fetchone()[0] == journal_mode
-        conn.execute("INSERT INTO sessions VALUES ('retained-session', 1)")
+        conn.execute("INSERT INTO sessions(id, created_at) VALUES ('retained-session', 1)")
         conn.commit()
         for _ in range(2):
             response = client.get("/health/ready")
             assert response.status_code == 200
             assert response.json()["status"] == "ready"
             assert response.json()["database"] == "ok"
-        assert conn.execute("SELECT * FROM sessions").fetchall() == [("retained-session", 1)]
+        assert conn.execute("SELECT id,created_at FROM sessions").fetchall() == [("retained-session", 1)]
         assert conn.execute("SELECT COUNT(*) FROM audit").fetchone()[0] == 0
 
 

@@ -1,32 +1,24 @@
-# This .gitignore is appropriate for repositories deployed to GitHub Pages and using
-# a Gemfile as specified at https://github.com/github/pages-gem#conventional
-
-# Basic Jekyll gitignores (synchronize to Jekyll.gitignore)
+# GitHub Pages / Jekyll defaults retained from the original repository
 _site/
 .sass-cache/
 .jekyll-cache/
 .jekyll-metadata
-
-# Additional Ruby/bundler ignore for when you run: bundle install
 /vendor
-
-# Specific ignore for GitHub Pages
-# GitHub Pages will always use its own deployed version of pages-gem
-# This means GitHub Pages will NOT use your Gemfile.lock and therefore it is
-# counterproductive to check this file into the repository.
-# Details at https://github.com/github/pages-gem/issues/768
 Gemfile.lock
 
-# Unified AI Personal v20
+# Python and local runtime data
 __pycache__/
 .pytest_cache/
 .venv/
 .env
 data/
 *.pyc
+.coverage
+htmlcov/
 
 # Never commit local credentials or Apple signing material
 .env.*
+!.env.example
 *.p8
 *.p12
 *.pem
@@ -43,3 +35,17 @@ DerivedData/
 .DS_Store
 *.ipa
 *.uai
+ios/UnifiedAI.xcodeproj/
+*.egg-info/
+
+# Local SQLite files outside the default data directory
+*.sqlite
+*.sqlite3
+*.db
+*.sqlite-*
+*.sqlite3-*
+*.db-*
+
+# Local Python distributions
+/build/
+/dist/

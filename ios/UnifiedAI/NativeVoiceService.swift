@@ -15,7 +15,12 @@ final class NativeVoiceService: NSObject, ObservableObject, AVSpeechSynthesizerD
     private var recognizer = SFSpeechRecognizer(locale: Locale(identifier: "ar-SA"))
     private var generation = UUID()
     private var finalDelivered = false
+    private var awaitingFinal = false
+    private var recognizerFinished = false
+    private var tapInstalled = false
+    private var finalizationTask: Task<Void, Never>?
     var onFinalTranscript: ((String) -> Void)?
+    var onPartialTranscript: ((String) -> Void)?
     var onRecordingStopped: (() -> Void)?
 
     override init() {
@@ -37,13 +42,16 @@ final class NativeVoiceService: NSObject, ObservableObject, AVSpeechSynthesizerD
         return true
     }
 
-    func start() async -> Bool {
+    func start() -> Bool {
         guard !recording else { return false }
-        guard await authorize() else { return false }
+        guard !awaitingFinal else { return false }
         stopSpeech()
         errorMessage = nil
         transcript = ""
         finalDelivered = false
+        recognizerFinished = false
+        awaitingFinal = false
+        finalizationTask?.cancel()
         let token = UUID()
         generation = token
         guard let recognizer, recognizer.isAvailable else {
@@ -52,7 +60,7 @@ final class NativeVoiceService: NSObject, ObservableObject, AVSpeechSynthesizerD
         }
         do {
             let session = AVAudioSession.sharedInstance()
-            try session.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker, .allowBluetoothHFP])
+            try session.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker, .allowBluetooth])
             try session.setActive(true)
             let input = audioEngine.inputNode
             let format = input.outputFormat(forBus: 0)
@@ -63,6 +71,7 @@ final class NativeVoiceService: NSObject, ObservableObject, AVSpeechSynthesizerD
             input.installTap(onBus: 0, bufferSize: 1024, format: format) { buffer, _ in
                 request.append(buffer)
             }
+            tapInstalled = true
             audioEngine.prepare()
             try audioEngine.start()
             recording = true
@@ -71,11 +80,18 @@ final class NativeVoiceService: NSObject, ObservableObject, AVSpeechSynthesizerD
                     guard let self, self.generation == token else { return }
                     if let result {
                         self.transcript = result.bestTranscription.formattedString
-                        if result.isFinal { self.deliverFinal() }
+                        self.onPartialTranscript?(self.transcript)
+                        if result.isFinal {
+                            self.recognizerFinished = true
+                            self.recording = false
+                            self.stopInput()
+                            if self.awaitingFinal { self.deliverFinal() }
+                        }
                     }
-                    if let error, self.recording {
+                    if let error, self.recording, !self.recognizerFinished {
                         self.errorMessage = error.localizedDescription
                         self.stopRecording(submit: false)
+                        self.onRecordingStopped?()
                     }
                 }
             }
@@ -87,33 +103,51 @@ final class NativeVoiceService: NSObject, ObservableObject, AVSpeechSynthesizerD
         }
     }
 
+    private func stopInput() {
+        if audioEngine.isRunning { audioEngine.stop() }
+        if tapInstalled {
+            audioEngine.inputNode.removeTap(onBus: 0)
+            tapInstalled = false
+            request?.endAudio()
+        }
+    }
+
     func stopRecording(submit: Bool) {
         guard recording || request != nil else { return }
         recording = false
-        if audioEngine.isRunning { audioEngine.stop() }
-        audioEngine.inputNode.removeTap(onBus: 0)
-        request?.endAudio()
+        stopInput()
         if submit {
-            // Allow a final recognizer callback briefly; the caller can also submit the
-            // best available partial transcript immediately if no final result arrives.
-            deliverFinal()
+            // Give Speech a bounded window to deliver its final hypothesis.
+            // A partial transcript is used only after the timeout, never at a pause.
+            awaitingFinal = true
+            if recognizerFinished { deliverFinal(); return }
+            let token = generation
+            finalizationTask?.cancel()
+            finalizationTask = Task { @MainActor [weak self] in
+                try? await Task.sleep(for: .milliseconds(700))
+                guard !Task.isCancelled, let self, self.generation == token else { return }
+                self.deliverFinal()
+            }
         } else {
+            awaitingFinal = false
+            finalizationTask?.cancel()
             generation = UUID()
             recognitionTask?.cancel()
             recognitionTask = nil
             request = nil
         }
-        onRecordingStopped?()
     }
 
     private func deliverFinal() {
-        guard !finalDelivered else { return }
+        guard !finalDelivered, awaitingFinal else { return }
         let value = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !value.isEmpty else { return }
         finalDelivered = true
+        awaitingFinal = false
+        finalizationTask?.cancel()
         recognitionTask?.cancel()
         recognitionTask = nil
         request = nil
+        generation = UUID()
         onFinalTranscript?(value)
     }
 
@@ -122,7 +156,9 @@ final class NativeVoiceService: NSObject, ObservableObject, AVSpeechSynthesizerD
         guard !text.isEmpty else { return }
         let utterance = AVSpeechUtterance(string: text)
         utterance.voice = AVSpeechSynthesisVoice(language: "ar-SA")
-        utterance.rate = AVSpeechUtteranceDefaultSpeechRate
+        utterance.rate = AVSpeechUtteranceDefaultSpeechRate * 0.88
+        utterance.preUtteranceDelay = 0.12
+        utterance.postUtteranceDelay = 0.08
         speaking = true
         synthesizer.speak(utterance)
     }
